@@ -1,0 +1,19 @@
+# Logging
+checkpoint_dir: model_checkpoints_test
+logdir: logs_test
+
+# Data
+datafile: /home/jav/Documents/Projects/SemRepFact/assets/filtering/annotations_test.csv
+max_seq_length: 128
+
+# Model
+bert_model_name_or_path: microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext
+dropout_prob: 0.1
+
+# Training
+batch_size: 32
+epochs: 5
+lr: 1.0e-05
+random_state: 0
+weight_decay: 0.01
+

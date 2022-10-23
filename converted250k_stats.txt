@@ -1,0 +1,16 @@
+num_events: 258052
+num_attributes: 761452
+Factuality:
+  Fact: 226460
+  Probable: 16258
+  Uncommitted: 6352
+  Possible: 7620
+  Counterfact: 1259
+  Doubtful: 103
+Polarity:
+  Positive: 250338
+  Negative: 1362
+Certainty:
+  L3: 227719
+  L2: 16258
+  L1: 7723
