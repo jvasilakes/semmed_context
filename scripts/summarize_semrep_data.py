@@ -14,6 +14,7 @@ def parse_args():
 
 
 def main(args):
+    assert os.path.isdir(args.anndir)
     annglob = glob(os.path.join(args.anndir, "*.ann"))
     all_counts = None
     for annfile in annglob:
@@ -54,13 +55,16 @@ def update_nested_dict(orig_dict, update_dict):
             orig_dict[key] += update_dict[key]
 
 
-def print_counts(counts, indent=0):
+def print_counts(counts, indent=0, num_events=None):
+    if num_events is None:
+        num_events = counts["num_events"]
     for (key, count) in counts.items():
         if isinstance(count, dict):
             print(f"{' ' * indent}{key}:")
-            print_counts(counts[key], indent=indent+2)
+            print_counts(counts[key], indent=indent+2, num_events=num_events)
         else:
-            print(f"{' ' * indent}{key}: {count}")
+            percent = 100 * (count / num_events)
+            print(f"{' ' * indent}{key}: {count} ({percent:.2f}%)")
 
 
 if __name__ == "__main__":
