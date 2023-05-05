@@ -1,0 +1,31 @@
+Experiment:
+  name: Test
+  logdir: /home/jav/Documents/Projects/SemRepFact/modeling/logs
+  version: 0
+  random_seed: 0
+Data:
+  # Directory containing .ann files containing
+  # annotations and .json files containing sentences.
+  datadir: /home/jav/Documents/Projects/SemRepFact/predications10k_negated/factuality/converted
+  # Can be either "all" or a list of strings specifying the tasks.
+  tasks_to_load: all
+  # See ENCODER_REGISTRY in data/encoders.py for valid values.
+  encoder_type: solid_marker
+  bert_model_name_or_path: bert-base-uncased
+  max_seq_length: 256
+  num_examples: 12
+Model:
+  # See MODEL_REGISTRY is models.py for valid values.
+  model_name: solid_marker
+  bert_model_name_or_path: bert-base-uncased
+  entity_pool_fn: max
+Training:
+  epochs: 3
+  lr: 0.001
+  batch_size: 8
+  weight_decay: 0.0
+  dropout_prob: 0.0
+Git:
+  branch: master
+  commit: 2c591e8
+  url: https://github.com/jvasilakes/semmed_context.git
