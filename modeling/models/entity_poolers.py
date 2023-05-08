@@ -14,7 +14,6 @@ class BaseEntityPooler(torch.nn.Module):
             torch.nn.Tanh())
 
     def forward(self, hidden, token_idxs):
-        assert len(token_idxs) == hidden.size(0), "Numbert of token_idxs not equal to batch size."  # noqa
         token_mask = self.get_token_mask_from_indices(
             token_idxs, hidden.size())
         token_mask = token_mask.to(hidden.device)
@@ -26,8 +25,15 @@ class BaseEntityPooler(torch.nn.Module):
     def string(self):
         return f"{self.__class__.__name__}({self.insize}, {self.outsize})"
 
+    def get_token_mask_from_indices(self, token_idxs, hidden_size):
+        token_mask = torch.zeros(hidden_size)
+        for (example_i, example_idxs) in enumerate(zip(*token_idxs)):
+            idxs = torch.concat(example_idxs)
+            token_mask[example_i, idxs, :] = 1.
+        return token_mask
+
     def pool_fn(self, masked_hidden, token_mask):
-        raise NotImplementedError
+        raise NotImplementedError()
 
 
 @register_entity_pooler("max")

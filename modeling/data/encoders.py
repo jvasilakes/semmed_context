@@ -97,15 +97,15 @@ class SolidMarkerEncoder(Encoder):
         del encoded["offset_mapping"]  # no longer needed
         if not all(subj_idxs + obj_idxs):
             raise ValueError("Can't find subject or object. Try increasing max_seq_length")  # noqa
-        markers = ["[S]", "[/S]", "[O]", "[/O]"]
-        self.tokenizer.add_special_tokens(
-            {"additional_special_tokens": markers})
-        marker_ids = self.tokenizer.additional_special_tokens_ids
+        #           [S],         [/S]         [O]          [/O]
+        markers = ["[unused0]", "[unused1]", "[unused2]", "[unused3]"]
+        marker_ids = self.tokenizer.convert_tokens_to_ids(markers)
         all_idxs = subj_idxs + obj_idxs
         insert_order = np.argsort(all_idxs)
         for (n, i) in enumerate(insert_order):
             encoded["input_ids"].insert(all_idxs[i] + n, marker_ids[i])
             all_idxs[i] += n
+        encoded["input_ids"] = encoded["input_ids"][:self.max_seq_length]
         example["encoded"] = {k: torch.as_tensor(v)
                               for (k, v) in encoded.items()}
         example["subject_idxs"] = torch.as_tensor(all_idxs[:2])

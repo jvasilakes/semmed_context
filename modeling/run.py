@@ -70,12 +70,9 @@ def run_train(config):
 
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
-    print(datamodule)
-    input()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
     model = model_class.from_config(config, datamodule.label_spec)
-    print(model); input()
     model.train()
 
     logger = TensorBoardLogger(

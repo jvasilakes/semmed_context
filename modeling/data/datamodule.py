@@ -13,15 +13,16 @@ class SemRepFactDataModule(pl.LightningDataModule):
         self._ran_setup = False
 
     def setup(self):
-        ds = SemRepFactDataset.from_config(self.config)
+        self.dataset = SemRepFactDataset.from_config(self.config)
 
-        train_size = int(len(ds) * 0.8)
-        evalu_size = len(ds) - train_size
+        train_size = int(len(self.dataset) * 0.8)
+        evalu_size = len(self.dataset) - train_size
         val_size = int(evalu_size / 2)
         test_size = evalu_size - val_size
-        self.train, evalu = random_split(ds, [train_size, evalu_size])
+        self.train, evalu = random_split(self.dataset, [train_size, evalu_size])
         self.val, self.test = random_split(evalu, [val_size, test_size])
-        self.label_spec = ds.label_spec
+        self.label_spec = self.dataset.label_spec
+        self.tokenizer = self.dataset.encoder.tokenizer
         self._ran_setup = True
 
     def train_dataloader(self) -> DataLoader:
