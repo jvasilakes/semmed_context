@@ -5,6 +5,7 @@ import string
 import sqlite3
 import argparse
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -24,7 +25,7 @@ SENT_COLUMNS = ["s.PMID", "s.SENTENCE_ID", "s.TYPE", "s.NUMBER",
                 "s.SENT_START_INDEX", "s.SENT_END_INDEX", "s.SENTENCE"]
 
 # Drug repurposing predicates from
-# Drug repurposing for COVID-19 via knowledge graph completion
+# "Drug repurposing for COVID-19 via knowledge graph completion"
 # (Zhang et al., 2021) https://doi.org/10.1016/j.jbi.2021.103696
 # These are used by default.
 # They are defined in the Jupyter notebook at
@@ -45,6 +46,12 @@ def parse_args():
                         help="Where to save the output.")
     parser.add_argument("--max-predications", type=int, default=10000,
                         help="Maximum number of predications to save.")
+    parser.add_argument("--negation-cue-list", type=str, default=None,
+                        help="""Path to file containing negation cues,
+                                one per line.""")
+    parser.add_argument("--certainty-cue-list", type=str, default=None,
+                        help="""Path to file containing certainty cues,
+                                one per line.""")
     return parser.parse_args()
 
 
@@ -54,7 +61,10 @@ def main(args):
     os.makedirs(args.outdir, exist_ok=False)
     semtype_map = load_semtype_map(args.semtype_mappings_file)
     db_conn = sqlite3.connect(args.semmeddb_sqlite)
-    predications, pmids = query_predicates(db_conn, n=args.max_predications)
+    predications, pmids = query_predicates(
+        db_conn, n=args.max_predications,
+        negation_cues_list=args.negation_cue_list,
+        certainty_cues_list=args.certainty_cue_list)
     sentences = query_sentences(db_conn, pmids)
     save_predications_to_brat(predications, semtype_map, args.outdir)
     save_sentences_to_json(sentences, args.outdir)
@@ -73,7 +83,8 @@ def load_semtype_map(filepath):
     return semtype_map
 
 
-def query_predicates(db_conn, n=-1):
+def query_predicates(db_conn, n=-1, negation_cues_list=None,
+                     certainty_cues_list=None):
     pred_columns = ','.join(PRED_COLUMNS)
     predicates = ','.join([f"'{pred}'" for pred in PREDICATES])
     query = f"""
@@ -91,6 +102,19 @@ def query_predicates(db_conn, n=-1):
     cursor = db_conn.cursor()
     print("Getting predications...", end='', flush=True)
 
+    neg_cues = []
+    if negation_cues_list is not None:
+        print("Getting likely negated predications...")
+        neg_cues = [line.strip().lower() for line in open(negation_cues_list)]
+
+    cert_cues = []
+    if certainty_cues_list is not None:
+        print("Getting likely uncertain predications...")
+        cert_cues = [line.strip().lower()
+                     for line in open(certainty_cues_list)]
+
+    cues = neg_cues + cert_cues
+
     pmids = set()
     predications = []
     total = n if n > 0 else None
@@ -104,10 +128,21 @@ def query_predicates(db_conn, n=-1):
             row = cursor.fetchone()
             if row is None:
                 break
-            pmids.add(row[0])
-            predications.append(row)
-            i += 1
-            pbar.update()
+            # keep this example if any cues match, or
+            # with a 0.1 percent chance otherwise.
+            keep_prob = 1.0
+            if len(cues) > 0:
+                keep_prob = 0.1
+                sentence = row[-1]
+                if match_cues(sentence, cues=cues) is True:
+                    keep_prob = 1.0
+            keep_row = np.random.choice(
+                [True, False], p=[keep_prob, 1.0 - keep_prob]).item()
+            if keep_row is True:
+                pmids.add(row[0])
+                predications.append(row)
+                i += 1
+                pbar.update()
 
     except KeyboardInterrupt:
         print("Saving predications fetched so far.")
@@ -142,6 +177,12 @@ def query_sentences(db_conn, pmids):
     cursor.close()
     print("Done", flush=True)
     return sentences
+
+
+def match_cues(sentence, cues):
+    cues_found = [re.search(r"\b" + re.escape(cue) + r"\b", sentence.lower())
+                  for cue in cues]
+    return any(cues_found)
 
 
 def save_predications_to_brat(predications, semtype_map, outdir):
