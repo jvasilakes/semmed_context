@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 import numpy as np
 from transformers import AutoTokenizer
@@ -15,31 +17,51 @@ def register_encoder(name):
 
 class Encoder(object):
 
+    @classmethod
+    def from_config(cls, config):
+        return cls(config.Data.bert_model_name_or_path.value,
+                   config.Data.max_seq_length.value)
+
     def __init__(self, bert_model_name_or_path="bert-base-uncased",
                  max_seq_length=256):
         self.bert_model_name_or_path = bert_model_name_or_path
         self.max_seq_length = max_seq_length
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.bert_model_name_or_path)
+        self._cache = {}
 
     def __call__(self, examples):
-        return [self.encode_single_example(example)
-                for example in examples]
+        if isinstance(examples, list):
+            return [self._encode_and_cache(example)
+                    for example in examples if example is not None]
+        else:
+            # There is just a single example
+            return self._encode_and_cache(examples)
 
     def encode_single_example(self, example):
         raise NotImplementedError
+
+    def _encode_and_cache(self, example):
+        key = example["__key__"]
+        try:
+            return self._cache[key]
+        except KeyError:
+            encoded = self.encode_single_example(example)
+            self._cache[key] = encoded
+            return encoded
 
 
 @register_encoder("default")
 class DefaultEncoder(Encoder):
 
     def encode_single_example(self, example):
-        encoded = self.tokenizer(example["text"], return_offsets_mapping=True,
+        data = example["json"]
+        encoded = self.tokenizer(data["text"], return_offsets_mapping=True,
                                  max_length=self.max_seq_length,
                                  padding="max_length", truncation=True)
 
-        subj_start, subj_end = example["subject"][1:]
-        obj_start, obj_end = example["object"][1:]
+        subj_start, subj_end = data["subject"][1:]
+        obj_start, obj_end = data["object"][1:]
         prev_end = 0
         subj_idxs = [None, None]
         obj_idxs = [None, None]
@@ -57,15 +79,16 @@ class DefaultEncoder(Encoder):
             prev_end = end
         del encoded["offset_mapping"]  # no longer needed
         if not all(subj_idxs + obj_idxs):
-            raise ValueError("Can't find subject or object. Try increasing max_seq_length")  # noqa
+            warnings.warn("Can't find subject or object. Try increasing max_seq_length")  # noqa
+            return None
         all_idxs = subj_idxs + obj_idxs
-        example["encoded"] = {k: torch.as_tensor(v)
-                              for (k, v) in encoded.items()}
-        example["subject_idxs"] = torch.as_tensor(all_idxs[:2])
-        example["object_idxs"] = torch.as_tensor(all_idxs[2:])
+        data["encoded"] = {k: torch.as_tensor(v)
+                           for (k, v) in encoded.items()}
+        data["subject_idxs"] = torch.as_tensor(all_idxs[:2])
+        data["object_idxs"] = torch.as_tensor(all_idxs[2:])
         # Just keep the text, we don't need the character offsets anymore.
-        example["subject"] = example["subject"][0]
-        example["object"] = example["object"][0]
+        data["subject"] = data["subject"][0]
+        data["object"] = data["object"][0]
         return example
 
 
@@ -73,12 +96,13 @@ class DefaultEncoder(Encoder):
 class SolidMarkerEncoder(Encoder):
 
     def encode_single_example(self, example):
-        encoded = self.tokenizer(example["text"], return_offsets_mapping=True,
+        data = example["json"]
+        encoded = self.tokenizer(data["text"], return_offsets_mapping=True,
                                  max_length=self.max_seq_length,
                                  padding="max_length", truncation=True)
 
-        subj_start, subj_end = example["subject"][1:]
-        obj_start, obj_end = example["object"][1:]
+        subj_start, subj_end = data["subject"][1:]
+        obj_start, obj_end = data["object"][1:]
         prev_end = 0
         subj_idxs = [None, None]
         obj_idxs = [None, None]
@@ -106,13 +130,13 @@ class SolidMarkerEncoder(Encoder):
             encoded["input_ids"].insert(all_idxs[i] + n, marker_ids[i])
             all_idxs[i] += n
         encoded["input_ids"] = encoded["input_ids"][:self.max_seq_length]
-        example["encoded"] = {k: torch.as_tensor(v)
-                              for (k, v) in encoded.items()}
-        example["subject_idxs"] = torch.as_tensor(all_idxs[:2])
-        example["object_idxs"] = torch.as_tensor(all_idxs[2:])
+        data["encoded"] = {k: torch.as_tensor(v)
+                           for (k, v) in encoded.items()}
+        data["subject_idxs"] = torch.as_tensor(all_idxs[:2])
+        data["object_idxs"] = torch.as_tensor(all_idxs[2:])
         # Just keep the text, we don't need the character offsets anymore.
-        example["subject"] = example["subject"][0]
-        example["object"] = example["object"][0]
+        data["subject"] = data["subject"][0]
+        data["object"] = data["object"][0]
         return example
 
 

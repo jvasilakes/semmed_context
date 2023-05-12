@@ -1,1 +1,1 @@
-from .datamodule import SemRepFactDataModule
+from .datamodules import SemRepFactDataModule, SemRepFactWebDataModule

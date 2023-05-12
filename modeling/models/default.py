@@ -82,7 +82,8 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
         return clf_outputs
 
     def training_step(self, batch, batch_idx):
-        outputs_by_task = self(batch["encoded"], labels=batch["labels"])
+        outputs_by_task = self(batch["json"]["encoded"],
+                               labels=batch["json"]["labels"])
         total_loss = torch.tensor(0.).to(self.device)
         for (task, outputs) in outputs_by_task.items():
             total_loss += outputs.loss
@@ -91,13 +92,14 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        outputs_by_task = self(batch["encoded"], labels=batch["labels"])
+        outputs_by_task = self(batch["json"]["encoded"],
+                               labels=batch["json"]["labels"])
         metrics = {}
         for (task, outputs) in outputs_by_task.items():
             preds = torch.argmax(outputs.logits, axis=1)
             metrics[task] = {"loss": outputs.loss,
                              "preds": preds,
-                             "labels": batch["labels"][task]}
+                             "labels": batch["json"]["labels"][task]}
         return metrics
 
     def validation_epoch_end(self, all_metrics):

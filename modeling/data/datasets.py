@@ -1,7 +1,10 @@
 import os
 from glob import glob
 from collections import Counter
+from tqdm import tqdm
 
+import numpy as np
+import webdataset as wds
 from torch.utils.data import Dataset
 
 import pybrat
@@ -9,7 +12,8 @@ import pybrat
 from .encoders import ENCODER_REGISTRY
 
 
-class SemRepFactDataset(Dataset):
+class BaseSemRepFactDataset(object):
+
     LABEL_ENCODINGS = {
         "Certainty": {"Uncertain": 0,  # L1 or L2
                       "Certain": 1},   # L3
@@ -23,47 +27,30 @@ class SemRepFactDataset(Dataset):
                        "Doubtful": 4}
     }
 
-    @classmethod
-    def from_config(cls, config):
-        return cls(datadir=config.Data.datadir.value,
-                   tasks_to_load=config.Data.tasks_to_load.value,
-                   encoder_type=config.Data.encoder_type.value,
-                   bert_model_name_or_path=config.Data.bert_model_name_or_path.value,
-                   max_seq_length=config.Data.max_seq_length.value,
-                   num_examples=config.Data.num_examples.value)
-
     def __init__(self,
                  datadir,
+                 encoder,
                  tasks_to_load="all",
-                 encoder_type="default",
                  bert_model_name_or_path="bert-base-uncased",
-                 max_seq_length=256,
                  num_examples=-1):
-        super().__init__()
         assert os.path.isdir(datadir), f"{datadir} is not a directory."
         self.datadir = datadir
+        self.encoder = encoder
         self.tasks_to_load = tasks_to_load
-        self.encoder_type = encoder_type
         self.bert_model_name_or_path = bert_model_name_or_path
-        self.max_seq_length = max_seq_length
         self.num_examples = num_examples
 
-        if self.tasks_to_load == "all":
-            self.tasks_to_load = list(self.LABEL_ENCODINGS.keys())
-        else:
-            assert isinstance(self.tasks_to_load, (list, tuple))
-        try:
-            self.encoder = ENCODER_REGISTRY[encoder_type]()
-        except KeyError:
-            raise KeyError(f"Unknown encoder type: '{encoder_type}'")
-        self.data = self.load()
-        self.data = self.encoder(self.data)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
+        if isinstance(tasks_to_load, str):
+            if tasks_to_load == "all":
+                tasks_to_load = list(self.LABEL_ENCODINGS.keys())
+            else:
+                tasks_to_load = [tasks_to_load]
+        assert isinstance(tasks_to_load, (list, tuple))
+        tasks_set = set(tasks_to_load)
+        valid_tasks_set = set(self.LABEL_ENCODINGS)
+        unknown_tasks = tasks_set.difference(valid_tasks_set)
+        assert len(unknown_tasks) == 0, f"Unknown tasks: '{unknown_tasks}'"
+        self.tasks_to_load = tasks_to_load
 
     @property
     def label_spec(self):
@@ -72,10 +59,90 @@ class SemRepFactDataset(Dataset):
                 if task in self.tasks_to_load}
 
     def load(self):
-        examples = []
+        raise NotImplementedError()
+
+
+class SemRepFactWebDataset(BaseSemRepFactDataset):
+
+    @classmethod
+    def from_config(cls, config):
+        encoder_type = config.Data.encoder_type.value
+        encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
+        return cls(config.Data.datadir.value, encoder,
+                   tasks_to_load=config.Data.tasks_to_load.value)
+
+    def __init__(self,
+                 datadir,
+                 encoder,
+                 tasks_to_load="all"):
+        super().__init__(datadir, encoder, tasks_to_load=tasks_to_load)
+        self.load()
+
+    def load(self):
+        train_path = os.path.join(self.datadir, "train.tar")
+        val_path = os.path.join(self.datadir, "val.tar")
+        test_path = os.path.join(self.datadir, "test.tar")
+        self.train = wds.WebDataset(train_path).shuffle(1000).decode()
+        self.train = self.train.map(self.encoder).map(self.tasks_filter)
+        self.val = wds.WebDataset(val_path).decode().map(self.encoder)
+        self.val = self.val.map(self.encoder).map(self.tasks_filter)
+        self.test = wds.WebDataset(test_path).decode().map(self.encoder)
+        self.test = self.test.map(self.encoder).map(self.tasks_filter)
+
+    def tasks_filter(self, sample):
+        if self.tasks_to_load == "all":
+            return sample
+        sample["json"]["labels"] = {
+            k: v for (k, v) in sample["json"]["labels"].items()
+            if k in self.tasks_to_load}
+        return sample
+
+
+class SemRepFactDataset(BaseSemRepFactDataset, Dataset):
+
+    @classmethod
+    def from_config(cls, config):
+        encoder_type = config.Data.encoder_type.value
+        encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
+        return cls(datadir=config.Data.datadir.value,
+                   encoder=encoder,
+                   tasks_to_load=config.Data.tasks_to_load.value,
+                   bert_model_name_or_path=config.Data.bert_model_name_or_path.value,  # noqa
+                   num_examples=config.Data.num_examples.value)
+
+    def __init__(self,
+                 datadir,
+                 encoder,
+                 tasks_to_load="all",
+                 bert_model_name_or_path="bert-base-uncased",
+                 num_examples=-1):
+        BaseSemRepFactDataset.__init__(
+            self, datadir, encoder,
+            tasks_to_load=tasks_to_load,
+            bert_model_name_or_path=bert_model_name_or_path,
+            num_examples=num_examples)
+        Dataset.__init__(self)
+        # To function as a standard Dataset, we need random access
+        # to the data, so we exhaust the load() generator.
+        self.data = list(self.load())
+        self.encoded_data = []
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        try:
+            item = self.encoded_data[idx]
+        except IndexError:
+            item = self.encoder(self.data[idx])
+            self.encoded_data.append(item)
+        return item
+
+    def load(self):
+        num_processed = 0
         annglob = os.path.join(self.datadir, "*.ann")
         annfiles = glob(annglob)
-        for annfile in annfiles:
+        for annfile in tqdm(annfiles):
             file_id = os.path.splitext(annfile)[0]
             jsonfile = f"{file_id}.json"
             assert os.path.isfile(jsonfile), f"{jsonfile} not found!"
@@ -105,36 +172,58 @@ class SemRepFactDataset(Dataset):
                             raise ValueError(f"Unsupported Certainty label '{label_dict[task]}'")  # noqa
                 label_dict = {task: self.LABEL_ENCODINGS[task][str_value]
                               for (task, str_value) in label_dict.items()}
-                example = {"text": sentence["_text"],
-                           "subject": subj,
-                           "predicate": pred.type,
-                           "object": obj,
-                           "labels": label_dict,
+                example = {"__key__": f"sample{num_processed:06d}",
+                           "__url__": annfile,
+                           "json": {"text": sentence["_text"],
+                                    "subject": subj,
+                                    "predicate": pred.type,
+                                    "object": obj,
+                                    "labels": label_dict}
                            }
-                examples.append(example)
-                if len(examples) == self.num_examples:
-                    return examples
-        return examples
+                yield example
+                num_processed += 1
+                if num_processed == self.num_examples:
+                    return
 
     def summarize(self):
         n = len(self.data)
-        pred_counts = Counter([ex["predicate"] for ex in self.data])
+        pred_counts = Counter([ex["json"]["predicate"] for ex in self.data])
         sorted_pred_counts = sorted(pred_counts.items(),
                                     key=lambda x: x[0])
-        pred_counts_str = '\n             '.join(
+        pred_counts_str = '\n  '.join(
             [f"{key}: {val} ({(val/n)*100:.2f}%)"
              for (key, val) in sorted_pred_counts])
         count_strings = {}
         for task in self.label_spec:
-            task_counts = Counter([ex[task] for ex in self.data])
+            task_counts = Counter([ex["json"]["labels"][task]
+                                   for ex in self.data])
             task_counts_str = ', '.join(
                 [f"{key}: {val} ({(val/n)*100:.2f}%)"
                  for (key, val) in task_counts.items()])
             count_strings[task] = task_counts_str
 
         print(f"N: {n}")
-        print(f"Predicates: {pred_counts_str}")
+        print(f"Predicates:\n  {pred_counts_str}")
         print("Labels")
-        for (task, tasks_counts) in count_strings.items():
-            print(f"  {task}: {task_counts}")
+        for (task, tc) in count_strings.items():
+            print(f"  {task}: {tc}")
         print()
+
+    def to_tar(self, outdir):
+        """
+        Used for converting a dataset to webdataset tar format.
+        """
+        train_path = os.path.join(outdir, "train.tar")
+        train_sink = wds.TarWriter(train_path)
+
+        val_path = os.path.join(outdir, "val.tar")
+        val_sink = wds.TarWriter(val_path)
+
+        test_path = os.path.join(outdir, "test.tar")
+        test_sink = wds.TarWriter(test_path)
+
+        sinks = [train_sink, val_sink, test_sink]
+        for (i, example) in enumerate(self.data):
+            sink = np.random.choice(sinks, p=[0.8, 0.1, 0.1])
+            sink.write(example)
+        sink.close()

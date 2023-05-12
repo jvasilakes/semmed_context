@@ -32,8 +32,11 @@ def random_seed(val):
 @config.parameter(group="Data", types=str)
 def datadir(val):
     """
-    Directory containing .ann files containing
+    Directory containing .ann files and containing
     annotations and .json files containing sentences.
+    OR
+    A directory containing .tar files with train, dev, and test splits
+    that can be loaded by webdataset.
     """
     assert os.path.isdir(val)
 

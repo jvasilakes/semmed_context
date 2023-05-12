@@ -92,10 +92,10 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         return clf_outputs
 
     def training_step(self, batch, batch_idx):
-        subj_obj_idxs = [batch["subject_idxs"], batch["object_idxs"]]
-        outputs_by_task = self(batch["encoded"],
+        subj_obj_idxs = [batch["json"]["subject_idxs"], batch["json"]["object_idxs"]]
+        outputs_by_task = self(batch["json"]["encoded"],
                                subj_obj_idxs,
-                               labels=batch["labels"])
+                               labels=batch["json"]["labels"])
         total_loss = torch.tensor(0.).to(self.device)
         for (task, outputs) in outputs_by_task.items():
             total_loss += outputs.loss
@@ -104,16 +104,16 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        subj_obj_idxs = [batch["subject_idxs"], batch["object_idxs"]]
-        outputs_by_task = self(batch["encoded"],
+        subj_obj_idxs = [batch["json"]["subject_idxs"], batch["json"]["object_idxs"]]
+        outputs_by_task = self(batch["json"]["encoded"],
                                subj_obj_idxs,
-                               labels=batch["labels"])
+                               labels=batch["json"]["labels"])
         metrics = {}
         for (task, outputs) in outputs_by_task.items():
             preds = torch.argmax(outputs.logits, axis=1)
             metrics[task] = {"loss": outputs.loss,
                              "preds": preds,
-                             "labels": batch["labels"][task]}
+                             "labels": batch["json"]["labels"][task]}
         return metrics
 
     def validation_epoch_end(self, all_metrics):

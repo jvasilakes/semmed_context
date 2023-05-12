@@ -1,8 +1,9 @@
 import os
 import argparse
 import warnings
-from collections import defaultdict
+from glob import glob
 from datetime import datetime
+from collections import defaultdict
 
 import torch
 import pytorch_lightning as pl
@@ -10,8 +11,11 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from config import config
-from data import SemRepFactDataModule
+from data import SemRepFactDataModule, SemRepFactWebDataModule
 from models import MODEL_REGISTRY
+
+
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -68,7 +72,11 @@ def run_train(config):
     os.makedirs(version_dir, exist_ok=False)
     config.yaml(outpath=os.path.join(version_dir, "config.yaml"))
 
-    datamodule = SemRepFactDataModule(config)
+    targlob = os.path.join(config.Data.datadir.value, "*.tar")
+    if len(glob(targlob)) > 0:
+        datamodule = SemRepFactWebDataModule(config)
+    else:
+        datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
@@ -130,7 +138,9 @@ def run_validate(config, datasplit):
     val_dataloader = val_dataloader_fn()
     results = trainer.validate(
         model, dataloaders=val_dataloader, verbose=False)[0]
-    format_results_as_markdown_table(results)
+    table = format_results_as_markdown_table(results)
+    print("\nResults")
+    print(table)
 
 
 def format_results_as_markdown_table(results_dict):
@@ -159,7 +169,7 @@ def format_results_as_markdown_table(results_dict):
                     table += f" {metrics[col]:<{max_len}.4f}|"
                 except KeyError:
                     table += f" {'-':<{max_len}}|"
-    print(table)
+    return table
 
 
 if __name__ == "__main__":
