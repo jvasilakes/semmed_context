@@ -50,6 +50,14 @@ bash bin/CoreNLP filtered_outdir/ corenlp_outdir/
 
 CoreNLP annotations will be saved as XML files in `corenlp_outdir`.
 
+There is also a parallelized version (using GNU parallel) that can be used like so
+
+```
+bash bin/CoreNLP_parallel N filtered_outdir/ corenlp_outdir/
+```
+
+where `N` is an integer specifying the number of jobs.
+
 
 3. Convert brat annotations to XML and merge them into the CoreNLP XML files.
 
@@ -93,10 +101,16 @@ event.insert(1, obj_elem)
 
 ```
 cd Bio-SCoRes
-bash bin/factualityPipeline xml_output_dir factuality_outdir
+bash bin/factualityPipeline xml_output_dir factuality_outdir 2> factuality.log
 ```
 
 `factuality_outdir` will contain two subdirectories, `standoff/` and `readable/` containing the factuality annotations in brat and pipe delimited formats, respectively.
+
+You can check the progress with
+
+```
+grep "Processing" factuality.log | wc -l
+```
 
 Then, the `.ann` files in `factuality_outdir/standoff/` and the text files in `filtered_outdir` can be read using `pybrat` as described in step 1.
 
@@ -108,8 +122,41 @@ Then, the `.ann` files in `factuality_outdir/standoff/` and the text files in `f
 python scripts/convert_factuality_anns.py factuality_outdir/standoff factuality_outdir/converted/
 ```
 
+It is helpful to have the `.ann` and `.json` files in the same directory, so we'll symlink them.
+
+```
+find filtered_outdir/ -name '*.json' -exec ln -s {} factuality_outdir/converted/ \;
+```
+
 6. Finally, the data can be summarized with 
 
 ```
 python scripts/summarize_semrep_data.py factuality_outdir/converted/
 ```
+
+## Appendix: Packaging and using large datasets
+
+If there are more than 100k predications, data loading can be quite slow, and a potential memory hog. To get around this,
+we'll use [webdataset](), which is able to read samples on the fly. 
+
+```
+python datatools.py tar path/to/config.yaml outdir/
+```
+
+This will create three `.tar` files: `{train,val,test}.tar`, which contain 80%, 10%, and 10% of the total examples, respecitvely.
+
+Separate dataset and datamodule classes are used for using tar-packaged datasets.
+
+```python
+from config import config
+import data.datasets as DS
+import data.datamodules as DM
+
+config.load_yaml(path_to_yaml_file)
+
+ds = DS.SemRepFactWebDataset.from_config(config)
+dm = DM.SemRepFactWebDataModule.from_config(config)
+```
+
+The `run.py` script will automatically determine whether you're using a tar dataset or not
+by checking the contents of `config.Data.datadir`.
