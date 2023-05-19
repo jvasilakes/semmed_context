@@ -1,4 +1,5 @@
 import os
+import warnings
 from glob import glob
 from collections import Counter
 from tqdm import tqdm
@@ -29,15 +30,16 @@ class BaseSemRepFactDataset(object):
 
     def __init__(self,
                  datadir,
-                 encoder,
+                 encoder=None,
                  tasks_to_load="all",
-                 bert_model_name_or_path="bert-base-uncased",
                  num_examples=-1):
         assert os.path.isdir(datadir), f"{datadir} is not a directory."
         self.datadir = datadir
-        self.encoder = encoder
+        if encoder is None:
+            self.encoder = lambda example: example
+        else:
+            self.encoder = encoder
         self.tasks_to_load = tasks_to_load
-        self.bert_model_name_or_path = bert_model_name_or_path
         self.num_examples = num_examples
 
         if isinstance(tasks_to_load, str):
@@ -62,13 +64,19 @@ class BaseSemRepFactDataset(object):
         raise NotImplementedError()
 
 
+# TODO: collation in the datamodule doesn't work with levitated marker encoder
 class SemRepFactWebDataset(BaseSemRepFactDataset):
 
     @classmethod
     def from_config(cls, config):
-        encoder_type = config.Data.encoder_type.value
-        encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
-        return cls(config.Data.datadir.value, encoder,
+        encoder_type = config.Data.Encoder.encoder_type.value
+        if encoder_type is None:
+            encoder = None
+        else:
+            encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
+        if config.Data.num_examples.value != -1:
+            warnings.warn("Data.num_examples was set but is ignored by SemRepFactWebDataset")  # noqa
+        return cls(config.Data.datadir.value, encoder=encoder,
                    tasks_to_load=config.Data.tasks_to_load.value)
 
     def __init__(self,
@@ -102,41 +110,36 @@ class SemRepFactDataset(BaseSemRepFactDataset, Dataset):
 
     @classmethod
     def from_config(cls, config):
-        encoder_type = config.Data.encoder_type.value
-        encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
+        encoder_type = config.Data.Encoder.encoder_type.value
+        if encoder_type is None:
+            encoder = None
+        else:
+            encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
         return cls(datadir=config.Data.datadir.value,
                    encoder=encoder,
                    tasks_to_load=config.Data.tasks_to_load.value,
-                   bert_model_name_or_path=config.Data.bert_model_name_or_path.value,  # noqa
                    num_examples=config.Data.num_examples.value)
 
     def __init__(self,
                  datadir,
                  encoder,
                  tasks_to_load="all",
-                 bert_model_name_or_path="bert-base-uncased",
                  num_examples=-1):
         BaseSemRepFactDataset.__init__(
             self, datadir, encoder,
             tasks_to_load=tasks_to_load,
-            bert_model_name_or_path=bert_model_name_or_path,
             num_examples=num_examples)
         Dataset.__init__(self)
         # To function as a standard Dataset, we need random access
         # to the data, so we exhaust the load() generator.
         self.data = list(self.load())
-        self.encoded_data = []
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        try:
-            item = self.encoded_data[idx]
-        except IndexError:
-            item = self.encoder(self.data[idx])
-            self.encoded_data.append(item)
-        return item
+        # The encoder caches the result
+        return self.encoder(self.data[idx])
 
     def load(self):
         num_processed = 0

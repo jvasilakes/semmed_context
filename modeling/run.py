@@ -86,7 +86,7 @@ def run_train(config):
     logger = TensorBoardLogger(
         save_dir=logdir, version=version, name=exp_name)
 
-    filename_fmt = f"{{epoch:02d}}"
+    filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
         monitor="avg_val_loss", mode="min", filename=filename_fmt)
 
@@ -108,7 +108,11 @@ def run_train(config):
 
 
 def run_validate(config, datasplit):
-    datamodule = SemRepFactDataModule(config)
+    targlob = os.path.join(config.Data.datadir.value, "*.tar")
+    if len(glob(targlob)) > 0:
+        datamodule = SemRepFactWebDataModule(config)
+    else:
+        datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]

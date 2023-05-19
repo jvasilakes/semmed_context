@@ -18,14 +18,15 @@ from .util import register_model, ENTITY_POOLER_REGISTRY
 transformers_logging.set_verbosity_error()
 
 
-@register_model("solid_marker")
-class SolidMarkerClassificationModel(pl.LightningModule):
+@register_model("levitated_marker")
+class LevitatedMarkerClassificationModel(pl.LightningModule):
 
     @classmethod
     def from_config(cls, config, label_spec):
         return cls(config.Model.bert_model_name_or_path.value,
                    label_spec=label_spec,
                    entity_pool_fn=config.Model.entity_pool_fn.value,
+                   levitated_pool_fn=config.Model.levitated_pool_fn.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
                    dropout_prob=config.Training.dropout_prob.value)
@@ -35,6 +36,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
             bert_model_name_or_path,
             label_spec,
             entity_pool_fn,
+            levitated_pool_fn,
             lr=1e-3,
             weight_decay=0.0,
             dropout_prob=0.0):
@@ -42,6 +44,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
         self.entity_pool_fn = entity_pool_fn
+        self.levitated_pool_fn = levitated_pool_fn
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout_prob = dropout_prob
@@ -51,14 +54,18 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         self.bert = BertModel.from_pretrained(
             self.bert_model_name_or_path, config=self.bert_config)
 
-        # Times two because we have the subject and object representations.
-        pooler_insize = 2 * self.bert_config.hidden_size
-        pooler_outsize = self.bert_config.hidden_size
+        pooler_insize = pooler_outsize = self.bert_config.hidden_size
+        # Multiply by 2 because we have subject and object.
         self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
+            2 * pooler_insize, pooler_outsize)
+
+        self.levitated_pooler = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](
             pooler_insize, pooler_outsize)
 
         self.classifier_heads = nn.ModuleDict()
-        classifier_insize = self.bert_config.hidden_size
+        # Multiply by 2 because we'll concat entity and
+        # levitated marker representations.
+        classifier_insize = 2 * self.bert_config.hidden_size
         for (task, num_labels) in label_spec.items():
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),
@@ -66,17 +73,22 @@ class SolidMarkerClassificationModel(pl.LightningModule):
             )
 
         self.loss_fn = nn.CrossEntropyLoss(reduction="mean")
-
         self.save_hyperparameters()
 
-    def forward(self, bert_inputs, entity_token_idxs, labels=None):
+    def forward(self, bert_inputs, entity_token_idxs,
+                levitated_token_idxs, labels=None):
         bert_outputs = self.bert(**bert_inputs,
                                  output_hidden_states=True,
                                  output_attentions=True,
                                  return_dict=True)
 
-        pooled_output = self.entity_pooler(
+        pooled_entities = self.entity_pooler(
             bert_outputs.last_hidden_state, entity_token_idxs)
+
+        pooled_levitated = self.levitated_pooler(
+            bert_outputs.last_hidden_state, levitated_token_idxs)
+
+        pooled_output = torch.cat([pooled_entities, pooled_levitated], dim=1)
 
         clf_outputs = {}
         for (task, clf_head) in self.classifier_heads.items():
@@ -97,8 +109,10 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         subj_obj_idxs = torch.stack(
             [batch["json"]["subject_idxs"],
              batch["json"]["object_idxs"]])
+        # unsqueeze(0) because we have to introduce the function dimension.
+        levitated_idxs = batch["json"]["levitated_idxs"].unsqueeze(0)
         outputs_by_task = self(batch["json"]["encoded"],
-                               subj_obj_idxs,
+                               subj_obj_idxs, levitated_idxs,
                                labels=batch["json"]["labels"])
         total_loss = torch.tensor(0.).to(self.device)
         for (task, outputs) in outputs_by_task.items():
@@ -111,8 +125,10 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         subj_obj_idxs = torch.stack(
             [batch["json"]["subject_idxs"],
              batch["json"]["object_idxs"]])
+        # unsqueeze(0) because we have to introduce the function dimension.
+        levitated_idxs = batch["json"]["levitated_idxs"].unsqueeze(0)
         outputs_by_task = self(batch["json"]["encoded"],
-                               subj_obj_idxs,
+                               subj_obj_idxs, levitated_idxs,
                                labels=batch["json"]["labels"])
         metrics = {}
         for (task, outputs) in outputs_by_task.items():

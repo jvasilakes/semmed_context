@@ -51,27 +51,36 @@ def tasks_to_load(val):
             assert isinstance(item, str)
 
 
-@config.parameter(group="Data", default="default", types=str)
+@config.parameter(group="Data", default=-1, types=int)
+def num_examples(val):
+    assert val == -1 or val > 0
+
+
+@config.parameter(group="Data.Encoder", default="default",
+                  types=(str, type(None)))
 def encoder_type(val):
     """
     See ENCODER_REGISTRY in data/encoders.py for valid values.
     """
-    assert val in ENCODER_REGISTRY.keys()
+    assert val is None or val in ENCODER_REGISTRY.keys()
 
 
-@config.parameter(group="Data", default="bert-base-uncased", types=str)
+@config.parameter(group="Data.Encoder", default="bert-base-uncased", types=str)
 def bert_model_name_or_path(val):
     pass
 
 
-@config.parameter(group="Data", default=256, types=int)
+@config.parameter(group="Data.Encoder", default=256, types=int)
 def max_seq_length(val):
     assert val > 1
 
 
-@config.parameter(group="Data", default=-1, types=int)
-def num_examples(val):
-    assert val == -1 or val > 0
+@config.parameter(group="Data.Encoder", default={}, types=dict)
+def init_kwargs(val):
+    """
+    A dict of optional keyword arguments to pass to the encoder.
+    """
+    pass
 
 
 @config.parameter(group="Model", default="default", types=str)
@@ -83,12 +92,23 @@ def model_name(val):
 
 
 @config.parameter(group="Model", default="bert-base-uncased", types=str)
-def bert_model_name_or_path(val):
+def bert_model_name_or_path(val):  # noqa F811 redefinition of unused 'bert_model_name_or_path' from line 69
     pass
 
 
-@config.parameter(group="Model", default=None, types=(str, type(None)))
+@config.parameter(group="Model", default="first", types=(str, type(None)))
 def entity_pool_fn(val):
+    """
+    How to pool the subject and object markers.
+    """
+    assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
+
+
+@config.parameter(group="Model", default="max", types=(str, type(None)))
+def levitated_pool_fn(val):
+    """
+    How to pool the levitated markers, if applicable.
+    """
     assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
 
 
@@ -119,8 +139,9 @@ def dropout_prob(val):
 
 @config.on_load
 def validate_parameters():
-    assert config.Data.bert_model_name_or_path == config.Model.bert_model_name_or_path  # noqa
-    assert config.Data.encoder_type == config.Model.model_name
+    assert config.Data.Encoder.bert_model_name_or_path == config.Model.bert_model_name_or_path  # noqa
+    if config.Data.Encoder.encoder_type.value is not None:
+        assert config.Data.Encoder.encoder_type == config.Model.model_name
 
 
 if __name__ == "__main__":
