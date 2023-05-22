@@ -4,6 +4,7 @@ from glob import glob
 from collections import Counter
 from tqdm import tqdm
 
+import torch
 import numpy as np
 import webdataset as wds
 from torch.utils.data import Dataset
@@ -11,6 +12,8 @@ from torch.utils.data import Dataset
 import pybrat
 
 from .encoders import ENCODER_REGISTRY
+
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class BaseSemRepFactDataset(object):
@@ -64,7 +67,6 @@ class BaseSemRepFactDataset(object):
         raise NotImplementedError()
 
 
-# TODO: collation in the datamodule doesn't work with levitated marker encoder
 class SemRepFactWebDataset(BaseSemRepFactDataset):
 
     @classmethod
