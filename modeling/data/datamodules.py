@@ -62,7 +62,7 @@ class SemRepFactWebDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return wds.WebLoader(self.dataset.train, batch_size=self.batch_size,
-                             num_workers=4).shuffle(1000)
+                             num_workers=4)
 
     def val_dataloader(self):
         return wds.WebLoader(self.dataset.val, batch_size=self.batch_size,
