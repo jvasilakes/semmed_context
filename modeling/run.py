@@ -15,12 +15,6 @@ from data import SemRepFactDataModule, SemRepFactWebDataModule
 from models import MODEL_REGISTRY
 
 
-torch.multiprocessing.set_sharing_strategy('file_system')
-
-
-os.environ["TOKENIZERS_PARALLELISM"] = "true"
-
-
 def parse_args():
     parser = argparse.ArgumentParser()
 
