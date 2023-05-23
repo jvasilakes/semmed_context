@@ -1,9 +1,11 @@
 import os
+import string
 import warnings
 
 import torch
 import numpy as np
 from transformers import AutoTokenizer
+from spacy.lang.en.stop_words import STOP_WORDS
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -224,11 +226,13 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
                  bert_model_name_or_path="bert-base-uncased",
                  max_seq_length=256,
                  levitated_window_size=4,
-                 max_num_markers=40
+                 max_num_markers=40,
+                 ignore_stopwords=True
                  ):
         super().__init__(bert_model_name_or_path, max_seq_length)
         self.levitated_window_size = levitated_window_size
         self.max_num_markers = max_num_markers
+        self.ignore_stopwords = ignore_stopwords
 
     def encode_single_example(self, example):
         data = example["json"]
@@ -264,9 +268,9 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         packed_encoded, new_entity_idxs = self.add_solid_markers(
             encoded, [pack_on[insert_order]])
 
-        # TODO: Ignore punctuation and stop words
         spans_to_mark = self.get_levitated_spans(
-            packed_encoded["input_ids"][0], new_entity_idxs)
+            packed_encoded["input_ids"][0], new_entity_idxs,
+            ignore_stopwords=self.ignore_stopwords)
         spans_before_entity = [(s, e) for (s, e) in spans_to_mark
                                if e < new_entity_idxs[0][0][0]]
         spans_between = [(s, e) for (s, e) in spans_to_mark
@@ -300,7 +304,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         data["levitated_idxs"] = padded_lev_spans
         return example
 
-    def get_levitated_spans(self, input_ids, entity_idxs):
+    def get_levitated_spans(self, input_ids, entity_idxs, ignore_stopwords=None):  # noqa
 
         entity_starts_ends = torch.stack(
             [torch.as_tensor(idxs) for idxs in entity_idxs[0]])
@@ -319,26 +323,36 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         uniques, counts = combined.unique(return_counts=True)
         levitated_idxs = uniques[counts == 1].tolist()
 
-        levitated_tokens = self.tokenizer.convert_ids_to_tokens(
-            [input_ids[i] for i in levitated_idxs])
+        tokens = self.tokenizer.convert_ids_to_tokens(input_ids)
         token_spans = self.collapse_wordpiece_spans(
-            levitated_tokens, levitated_idxs)
+            tokens, levitated_idxs,
+            ignore_stopwords=ignore_stopwords)
         return token_spans
 
-    def collapse_wordpiece_spans(self, tokens, token_idxs):
+    def collapse_wordpiece_spans(self, tokens, token_idxs, ignore_stopwords=False):  # noqa
         out_token_spans = []
         current_token_span = []
-        for (wp, idx) in zip(tokens, token_idxs):
+        ignore_tokens = []
+        if ignore_stopwords is True:
+            ignore_tokens = STOP_WORDS.union(set(string.punctuation))
+        for idx in token_idxs:
+            wp = tokens[idx]
             if wp.startswith("##"):
                 current_token_span.append(idx)
             else:
                 if current_token_span != []:
-                    out_token_spans.append((current_token_span[0],
-                                            current_token_span[-1] + 1))
+                    collapsed_token = ''.join(
+                        [tokens[i].strip('#') for i in current_token_span])
+                    if collapsed_token not in ignore_tokens:
+                        out_token_spans.append((current_token_span[0],
+                                                current_token_span[-1]+1))
                 current_token_span = [idx]
         if current_token_span != []:
-            out_token_spans.append((current_token_span[0],
-                                    current_token_span[-1] + 1))
+            collapsed_token = ''.join(
+                [tokens[i].strip('#') for i in current_token_span])
+            if collapsed_token not in ignore_tokens:
+                out_token_spans.append((current_token_span[0],
+                                        current_token_span[-1]+1))
         return out_token_spans
 
     def add_levitated_markers(self, tokenizer_output, spans_to_mark,
