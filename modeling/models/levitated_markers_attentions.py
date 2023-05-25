@@ -1,31 +1,46 @@
 import warnings
 from copy import deepcopy
 from collections import defaultdict
+from typing import Optional, Tuple
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
+from dataclasses import dataclass
 from transformers import BertConfig, BertModel
 from transformers import logging as transformers_logging
-from transformers.modeling_outputs import SequenceClassifierOutput
+from transformers.file_utils import ModelOutput
 from sklearn.metrics import precision_recall_fscore_support
 
-from .util import register_model
+from .util import register_model, ENTITY_POOLER_REGISTRY
 
 
 # Ignore warning that BertModel is not using some parameters.
 transformers_logging.set_verbosity_error()
 
 
-@register_model("default")
-class BertForMultiTaskSequenceClassification(pl.LightningModule):
+@dataclass
+class SequenceClassifierOutputWithTokenMask(ModelOutput):
+
+    logits: torch.FloatTensor = None
+    loss: Optional[torch.FloatTensor] = None
+    mask_loss: Optional[torch.FloatTensor] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+    mask: Optional[torch.FloatTensor] = None
+
+
+@register_model("levitated_marker_attentions")
+class LevitatedMarkerModelWithAttentions(pl.LightningModule):
 
     @classmethod
     def from_config(cls, config, label_spec):
         return cls(config.Model.bert_model_name_or_path.value,
                    label_spec=label_spec,
+                   entity_pool_fn=config.Model.entity_pool_fn.value,
+                   levitated_pool_fn=config.Model.levitated_pool_fn.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
                    dropout_prob=config.Training.dropout_prob.value)
@@ -34,12 +49,16 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
             self,
             bert_model_name_or_path,
             label_spec,
+            entity_pool_fn,
+            levitated_pool_fn,
             lr=1e-3,
             weight_decay=0.0,
             dropout_prob=0.0):
         super().__init__()
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
+        self.entity_pool_fn = entity_pool_fn
+        self.levitated_pool_fn = levitated_pool_fn
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout_prob = dropout_prob
@@ -49,42 +68,72 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
         self.bert = BertModel.from_pretrained(
             self.bert_model_name_or_path, config=self.bert_config)
 
+        pooler_insize = pooler_outsize = self.bert_config.hidden_size
+        # Multiply by 2 because we have subject and object.
+        self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
+            2 * pooler_insize, pooler_outsize)
+
         self.classifier_heads = nn.ModuleDict()
-        classifier_insize = self.bert_config.hidden_size
+        self.levitated_poolers = nn.ModuleDict()
+        # Multiply by 2 because we'll concat entity and
+        # levitated marker representations.
+        classifier_insize = 2 * self.bert_config.hidden_size
         for (task, num_labels) in label_spec.items():
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),
                 nn.Linear(classifier_insize, num_labels)
             )
+            self.levitated_poolers[task] = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](  # noqa
+                pooler_insize, pooler_outsize)
 
         self.loss_fn = nn.CrossEntropyLoss(reduction="mean")
-
         self.save_hyperparameters()
 
-    def forward(self, bert_inputs, labels=None):
+    def forward(self, bert_inputs, entity_token_idxs,
+                levitated_token_idxs, labels=None):
         bert_outputs = self.bert(**bert_inputs,
                                  output_hidden_states=True,
                                  output_attentions=True,
                                  return_dict=True)
-        pooled_output = bert_outputs.pooler_output
+
+        pooled_entities = self.entity_pooler(
+            bert_outputs.last_hidden_state, entity_token_idxs)
+
         clf_outputs = {}
         for (task, clf_head) in self.classifier_heads.items():
+            tmp = self.levitated_poolers[task](
+                bert_outputs.last_hidden_state, levitated_token_idxs,
+                pooled_entities)
+            pooled_levitated, levitated_attentions = tmp
+            pooled_output = torch.cat([pooled_entities, pooled_levitated],
+                                      dim=1)
             logits = clf_head(pooled_output)
             if labels is not None:
                 clf_loss = self.loss_fn(logits.view(-1, self.label_spec[task]),
                                         labels[task].view(-1))
             else:
                 clf_loss = None
-            clf_outputs[task] = SequenceClassifierOutput(
+            clf_outputs[task] = SequenceClassifierOutputWithTokenMask(
                 loss=clf_loss,
                 logits=logits,
                 hidden_states=bert_outputs.hidden_states,
-                attentions=bert_outputs.attentions)
+                attentions=bert_outputs.attentions,
+                mask=levitated_attentions[0])
         return clf_outputs
 
-    def training_step(self, batch, batch_idx):
+    def get_model_outputs(self, batch):
+        subj_obj_idxs = torch.stack(
+            [batch["json"]["subject_idxs"],
+             batch["json"]["object_idxs"]])
+        # unsqueeze(0) because we have to introduce the function dimension.
+        levitated_idxs = batch["json"]["levitated_idxs"].unsqueeze(0)
         outputs_by_task = self(batch["json"]["encoded"],
+                               subj_obj_idxs, levitated_idxs,
                                labels=batch["json"]["labels"])
+        return outputs_by_task
+
+    def training_step(self, batch, batch_idx):
+        outputs_by_task = self.get_model_outputs(batch)
         total_loss = torch.tensor(0.).to(self.device)
         for (task, outputs) in outputs_by_task.items():
             total_loss += outputs.loss
@@ -93,8 +142,7 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        outputs_by_task = self(batch["json"]["encoded"],
-                               labels=batch["json"]["labels"])
+        outputs_by_task = self.get_model_outputs(batch)
         metrics = {}
         for (task, outputs) in outputs_by_task.items():
             preds = torch.argmax(outputs.logits, axis=1)
@@ -104,15 +152,34 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
         return metrics
 
     def predict_step(self, batch, batch_idx):
-        outputs_by_task = self(batch["json"]["encoded"],
-                               labels=batch["json"]["labels"])
+        outputs_by_task = self.get_model_outputs(batch)
         batch_cp = deepcopy(batch)
-        batch_cp["predictions"] = {}
+        batch_cp["json"]["predictions"] = {}
+        batch_cp["json"]["token_masks"] = {}
         for (task, outputs) in outputs_by_task.items():
             softed = torch.nn.functional.softmax(outputs.logits, dim=1)
             preds = torch.argmax(softed, dim=1)
-            batch_cp["predictions"][task] = preds
+            batch_cp["json"]["predictions"][task] = preds
+            batch_cp["json"]["token_masks"][task] = []
+            for (i, example_mask) in enumerate(outputs.mask):
+                position_ids = batch["json"]["encoded"]["position_ids"][i]
+                levitated_idxs = batch["json"]["levitated_idxs"][i]  # noqa
+                moved_mask = self.move_levitated_mask_to_tokens(
+                    example_mask, position_ids, levitated_idxs)
+                batch_cp["json"]["token_masks"][task].append(moved_mask)
         return batch_cp
+
+    def move_levitated_mask_to_tokens(self, mask, position_ids, levitated_idxs):  # noqa
+        """
+        Reassign the attention probabilities from the levitated markers
+        to the tokens the stand for.
+        """
+        new_mask = torch.zeros_like(mask)
+        levitated_positions = position_ids[levitated_idxs]
+        for li in levitated_positions.unique():
+            single_span_idxs = torch.where(levitated_positions == li)
+            new_mask[li] = mask[levitated_idxs][single_span_idxs].sum()
+        return new_mask
 
     def validation_epoch_end(self, all_metrics):
         losses_by_task = defaultdict(list)

@@ -1,4 +1,5 @@
 import warnings
+from copy import deepcopy
 from collections import defaultdict
 
 import numpy as np
@@ -105,7 +106,7 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
                 attentions=bert_outputs.attentions)
         return clf_outputs
 
-    def training_step(self, batch, batch_idx):
+    def get_model_outputs(self, batch):
         subj_obj_idxs = torch.stack(
             [batch["json"]["subject_idxs"],
              batch["json"]["object_idxs"]])
@@ -114,6 +115,10 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
         outputs_by_task = self(batch["json"]["encoded"],
                                subj_obj_idxs, levitated_idxs,
                                labels=batch["json"]["labels"])
+        return outputs_by_task
+
+    def training_step(self, batch, batch_idx):
+        outputs_by_task = self.get_model_outputs(batch)
         total_loss = torch.tensor(0.).to(self.device)
         for (task, outputs) in outputs_by_task.items():
             total_loss += outputs.loss
@@ -122,14 +127,7 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
         return total_loss
 
     def validation_step(self, batch, batch_idx):
-        subj_obj_idxs = torch.stack(
-            [batch["json"]["subject_idxs"],
-             batch["json"]["object_idxs"]])
-        # unsqueeze(0) because we have to introduce the function dimension.
-        levitated_idxs = batch["json"]["levitated_idxs"].unsqueeze(0)
-        outputs_by_task = self(batch["json"]["encoded"],
-                               subj_obj_idxs, levitated_idxs,
-                               labels=batch["json"]["labels"])
+        outputs_by_task = self.get_model_outputs(batch)
         metrics = {}
         for (task, outputs) in outputs_by_task.items():
             preds = torch.argmax(outputs.logits, axis=1)
@@ -137,6 +135,16 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
                              "preds": preds,
                              "labels": batch["json"]["labels"][task]}
         return metrics
+
+    def predict_step(self, batch, batch_idx):
+        outputs_by_task = self.get_model_outputs(batch)
+        batch_cp = deepcopy(batch)
+        batch_cp["predictions"] = {}
+        for (task, outputs) in outputs_by_task.items():
+            softed = torch.nn.functional.softmax(outputs.logits, dim=1)
+            preds = torch.argmax(softed, dim=1)
+            batch_cp["predictions"][task] = preds
+        return batch_cp
 
     def validation_epoch_end(self, all_metrics):
         losses_by_task = defaultdict(list)
