@@ -141,7 +141,9 @@ def dropout_prob(val):
 def validate_parameters():
     assert config.Data.Encoder.bert_model_name_or_path == config.Model.bert_model_name_or_path  # noqa
     if config.Data.Encoder.encoder_type.value is not None:
-        assert config.Data.Encoder.encoder_type == config.Model.model_name
+        # Use in to check since we can have derivative models,
+        # e.g., levitated_marker vs. levitated_marker_attentions
+        assert config.Data.Encoder.encoder_type.value in config.Model.model_name.value  # noqa
 
 
 if __name__ == "__main__":
