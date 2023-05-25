@@ -10,7 +10,6 @@ from spacy.lang.en.stop_words import STOP_WORDS
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
-
 ENCODER_REGISTRY = {}
 
 
@@ -281,7 +280,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         spans_in_window = spans_before_entity[-self.levitated_window_size:] + \
             spans_between + spans_after_entity[:self.levitated_window_size]
         spans_in_window = spans_in_window[:self.max_num_markers]
-        packed_levitated = self.add_levitated_markers(
+        packed_levitated, lev_marker_idxs = self.add_levitated_markers(
             packed_encoded, [spans_in_window],
             start_marker_id=5, end_marker_id=6)
         # The transformers tokenizer adds a batch dimension, which we need to
@@ -300,7 +299,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         data["object"] = data["object"][0]
         pad_amount = self.max_num_markers - len(spans_in_window)
         padded_lev_spans = torch.as_tensor(
-            spans_in_window + [[0, 0] for _ in range(pad_amount)])
+            lev_marker_idxs[0] + [[0, 0] for _ in range(pad_amount)])
         data["levitated_idxs"] = padded_lev_spans
         return example
 
@@ -332,7 +331,8 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
     def collapse_wordpiece_spans(self, tokens, token_idxs, ignore_stopwords=False):  # noqa
         out_token_spans = []
         current_token_span = []
-        ignore_tokens = []
+        # Always ignore punctuation
+        ignore_tokens = set(string.punctuation)
         if ignore_stopwords is True:
             ignore_tokens = STOP_WORDS.union(set(string.punctuation))
         for idx in token_idxs:
@@ -405,6 +405,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
              torch.zeros(batch_size, self.max_num_markers * 2,
                          dtype=torch.long)))
 
+        levitated_marker_idxs = [[] for _ in range(batch_size)]
         for example_idx in range(batch_size):
             # Create the empty input_ids, position_ids, and attention_mask
             # which we'll populate below.
@@ -433,6 +434,8 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
                                            max_levitated_seq_length - 1, 2))
             for (marker_start, span) in zip(marker_start_idxs, spans_to_mark[example_idx]):  # noqa
                 marker_end = marker_start + 1
+                levitated_marker_idxs[example_idx].append(
+                    (marker_start, marker_end))
 
                 # Add the marker input_ids
                 new_input_ids[marker_start] = start_marker_id
@@ -458,7 +461,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         new_encodings["input_ids"] = torch.vstack(new_encodings["input_ids"])
         new_encodings["position_ids"] = torch.vstack(new_encodings["position_ids"])  # noqa
         new_encodings["attention_mask"] = torch.vstack(new_encodings["attention_mask"])  # noqa
-        return new_encodings
+        return new_encodings, levitated_marker_idxs
 
 
 def visualize_attention_matrix(tokens, attn_mat):

@@ -1,1 +1,1 @@
-from .datamodules import SemRepFactDataModule, SemRepFactWebDataModule  # noqa F401
+from .datamodules import SemRepFactDataModule  # noqa F401
