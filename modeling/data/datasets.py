@@ -13,14 +13,7 @@ from .encoders import ENCODER_REGISTRY
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 
-class BaseSemRepFactDataset(object):
-
-    def load(self):
-        # should return [train, val, test]
-        raise NotImplementedError()
-
-
-class SemRepFactDataset(BaseSemRepFactDataset):
+class SemRepFactDataset(object):
 
     LABEL_ENCODINGS = {
         "Certainty": {"Uncertain": 0,  # L1 or L2
@@ -32,8 +25,34 @@ class SemRepFactDataset(BaseSemRepFactDataset):
                        "Probable": 2,
                        # Uncommitted is omitted
                        "Possible": 3,
-                       "Doubtful": 4}
+                       "Doubtful": 4},
+        "Predicate": {"AFFECTS": 0,
+                      "ASSOCIATED_WITH": 1,
+                      "AUGMENTS": 2,
+                      "CAUSES": 3,
+                      "COEXISTS_WITH": 4,
+                      "COMPLICATES": 5,
+                      "DISRUPTS": 6,
+                      "INHIBITS": 7,
+                      "INTERACTS_WITH": 8,
+                      "MANIFESTATION_OF": 9,
+                      "PREDISPOSES": 10,
+                      "PREVENTS": 11,
+                      "PRODUCES": 12,
+                      "STIMULATES": 13,
+                      "TREATS": 14}
     }
+
+    @property
+    def INVERSE_LABEL_ENCODINGS(self):
+        try:
+            return getattr(self, "_inverse_label_encodings")
+        except AttributeError:
+            self._inverse_label_encodings = {
+                task: {enc_label: str_label for (str_label, enc_label)
+                       in self.LABEL_ENCODINGS[task].items()}
+                for task in self.LABEL_ENCODINGS}
+            return self._inverse_label_encodings
 
     @classmethod
     def from_config(cls, config):
@@ -52,6 +71,7 @@ class SemRepFactDataset(BaseSemRepFactDataset):
                  encoder=None,
                  tasks_to_load="all",
                  num_examples=-1):
+        super().__init__()
         assert os.path.isdir(datadir), f"{datadir} is not a directory."
         self.datadir = datadir
         if encoder is None:
@@ -96,6 +116,10 @@ class SemRepFactDataset(BaseSemRepFactDataset):
         return splits
 
     def load_tar(self, tardir):
+        """
+        Load the dataset already preprocessed and split
+        into train, val, and test.
+        """
         train_path = os.path.join(tardir, "train.tar.gz")
         val_path = os.path.join(tardir, "val.tar.gz")
         test_path = os.path.join(tardir, "test.tar.gz")
@@ -114,6 +138,9 @@ class SemRepFactDataset(BaseSemRepFactDataset):
         return train, val, test
 
     def load_ann(self, anndir):
+        """
+        Load the dataset from .ann and .json files directly.
+        """
         examples = []
         num_processed = 0
         annglob = os.path.join(anndir, "*.ann")
@@ -138,7 +165,9 @@ class SemRepFactDataset(BaseSemRepFactDataset):
                        obj.start_index - sentence["start_char"],
                        obj.end_index - sentence["start_char"])
                 label_dict = {task: event.attributes[task].value
-                              for task in self.LABEL_ENCODINGS}
+                              for task in self.LABEL_ENCODINGS
+                              if task in event.attributes}
+                label_dict["Predicate"] = pred.type
                 for task in label_dict:
                     if task == "Certainty":
                         if label_dict[task] in ["L1", "L2"]:
@@ -147,13 +176,12 @@ class SemRepFactDataset(BaseSemRepFactDataset):
                             label_dict[task] = "Certain"
                         else:
                             raise ValueError(f"Unsupported Certainty label '{label_dict[task]}'")  # noqa
-                label_dict = {task: self.LABEL_ENCODINGS[task][str_value]
-                              for (task, str_value) in label_dict.items()}
+                label_dict = {task: self.LABEL_ENCODINGS[task][val]
+                              for (task, val) in label_dict.items()}
                 example = {"__key__": f"sample{num_processed:06d}",
                            "__url__": annfile,
                            "json": {"text": sentence["_text"],
                                     "subject": subj,
-                                    "predicate": pred.type,
                                     "object": obj,
                                     "labels": label_dict}
                            }
