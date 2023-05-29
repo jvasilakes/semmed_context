@@ -166,7 +166,8 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
                 levitated_idxs = batch["json"]["levitated_idxs"][i]  # noqa
                 moved_mask = self.move_levitated_mask_to_tokens(
                     example_mask, position_ids, levitated_idxs)
-                batch_cp["json"]["token_masks"][task].append(moved_mask)
+                batch_cp["json"]["token_masks"][task].append(
+                    moved_mask.squeeze())
         return batch_cp
 
     def move_levitated_mask_to_tokens(self, mask, position_ids, levitated_idxs):  # noqa
