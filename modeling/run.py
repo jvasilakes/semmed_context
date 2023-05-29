@@ -3,6 +3,7 @@ import json
 import argparse
 import warnings
 from glob import glob
+from copy import deepcopy
 from datetime import datetime
 from collections import defaultdict
 
@@ -181,21 +182,25 @@ def run_predict(config, datasplit):
     preds = trainer.predict(
         model, dataloaders=predict_dataloader)
 
-    outdir = os.path.join(
+    preddir = os.path.join(
         config.Experiment.logdir.value,
         config.Experiment.name.value,
         f"version_{config.Experiment.version.value}",
         "predictions")
-    os.makedirs(outdir, exist_ok=True)
-    outfile = os.path.join(outdir, f"{datasplit}.jsonl")
 
-    ignore_keys = ["token_type_ids", "attention_mask", "position_ids"]
+    ignore_keys = ["token_type_ids", "attention_mask",
+                   "position_ids", "levitated_idxs"]
     preds = unbatch(preds, ignore_keys=ignore_keys)
-    for pred in preds:
-        with open(outfile, 'w') as outF:
-            for pred in preds:
-                json.dump(pred, outF)
-                outF.write('\n')
+    preds_by_task = decode_and_split_by_task(preds, datamodule)
+    for (task, preds) in preds_by_task.items():
+        outdir = os.path.join(preddir, datasplit)
+        os.makedirs(outdir, exist_ok=True)
+        outfile = os.path.join(outdir, f"{task}.jsonl")
+        for pred in preds:
+            with open(outfile, 'w') as outF:
+                for pred in preds:
+                    json.dump(pred, outF)
+                    outF.write('\n')
 
 
 def find_model_checkpoint(config):
@@ -239,11 +244,33 @@ def maybe_convert(value):
     it back to a standard Python object if it is.
     """
     if torch.is_tensor(value):
+        value = value.squeeze()
         if value.dim() == 0:
             return value.item()
         else:
             return value.tolist()
     return value
+
+
+def decode_and_split_by_task(unbatched, datamodule):
+    examples_by_task = defaultdict(list)
+    for example in unbatched:
+        for task in example["json"]["labels"].keys():
+            excp = deepcopy(example)
+            encodings = excp["json"].pop("encoded")
+            input_ids = encodings["input_ids"]
+            seq_len = input_ids.index(0)
+            excp["json"]["tokens"] = datamodule.tokenizer.convert_ids_to_tokens(input_ids[:seq_len])  # noqa
+            excp["json"]["task"] = task
+            labels = excp["json"].pop("labels")
+            excp["json"]["label"] = datamodule.dataset.INVERSE_LABEL_ENCODINGS[task][labels[task]]  # noqa
+            preds = excp["json"].pop("predictions")
+            excp["json"]["prediction"] = datamodule.dataset.INVERSE_LABEL_ENCODINGS[task][preds[task]]  # noqa
+            if "token_masks" in excp["json"].keys():
+                masks = excp["json"].pop("token_masks")
+                excp["json"]["token_mask"] = masks[task][:seq_len]
+            examples_by_task[task].append(excp)
+    return examples_by_task
 
 
 def format_results_as_markdown_table(results_dict):
