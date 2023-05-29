@@ -226,7 +226,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
                  max_seq_length=256,
                  levitated_window_size=4,
                  max_num_markers=40,
-                 ignore_stopwords=True
+                 ignore_stopwords=False
                  ):
         super().__init__(bert_model_name_or_path, max_seq_length)
         self.levitated_window_size = levitated_window_size
