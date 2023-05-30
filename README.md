@@ -133,30 +133,3 @@ find filtered_outdir/ -name '*.json' -exec ln -s {} factuality_outdir/converted/
 ```
 python scripts/summarize_semrep_data.py factuality_outdir/converted/
 ```
-
-## Appendix: Packaging and using large datasets
-
-If there are more than 100k predications, data loading can be quite slow, and a potential memory hog. To get around this,
-we'll use [webdataset](), which is able to read samples on the fly. 
-
-```
-python datatools.py tar path/to/config.yaml outdir/
-```
-
-This will create three `.tar` files: `{train,val,test}.tar`, which contain 80%, 10%, and 10% of the total examples, respecitvely.
-
-Separate dataset and datamodule classes are used for using tar-packaged datasets.
-
-```python
-from config import config
-import data.datasets as DS
-import data.datamodules as DM
-
-config.load_yaml(path_to_yaml_file)
-
-ds = DS.SemRepFactWebDataset.from_config(config)
-dm = DM.SemRepFactWebDataModule.from_config(config)
-```
-
-The `run.py` script will automatically determine whether you're using a tar dataset or not
-by checking the contents of `config.Data.datadir`.
