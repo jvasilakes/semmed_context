@@ -1,6 +1,7 @@
 import os
+from copy import deepcopy
 from glob import glob
-from collections import Counter
+from collections import defaultdict
 from tqdm import tqdm
 
 import torch
@@ -125,10 +126,13 @@ class SemRepFactDataset(object):
         test_path = os.path.join(tardir, "test.tar.gz")
         train = wds.WebDataset(train_path).shuffle(1000).decode()
         train = train.map(self.encoder).map(self.tasks_filter)
+        train = train.map(self.transform_labels)
         val = wds.WebDataset(val_path).decode()
         val = val.map(self.encoder).map(self.tasks_filter)
+        val = val.map(self.transform_labels)
         test = wds.WebDataset(test_path).decode()
         test = test.map(self.encoder).map(self.tasks_filter)
+        test = test.map(self.transform_labels)
         if self.num_examples > -1:
             # We have to call list, otherwise slice will return
             # different examples each epoch.
@@ -136,6 +140,29 @@ class SemRepFactDataset(object):
             val = list(val.slice(self.num_examples))
             test = list(test.slice(self.num_examples))
         return train, val, test
+
+    def transform_labels(self, example):
+        excp = deepcopy(example)
+        label_dict = excp["json"].pop("labels")
+        excp["json"]["labels"] = {task: self.LABEL_ENCODINGS[task][val]
+                                  for (task, val) in label_dict.items()}
+        return excp
+
+    def inverse_transform_labels(self, example):
+        excp = deepcopy(example)
+        label_dict = excp["json"].pop("labels")
+        excp["json"]["labels"] = {
+            task: self.INVERSE_LABEL_ENCODINGS[task][val]
+            for (task, val) in label_dict.items()}
+        return excp
+
+    def tasks_filter(self, sample):
+        if self.tasks_to_load == "all":
+            return sample
+        sample["json"]["labels"] = {
+            k: v for (k, v) in sample["json"]["labels"].items()
+            if k in self.tasks_to_load}
+        return sample
 
     def load_ann(self, anndir):
         """
@@ -176,8 +203,6 @@ class SemRepFactDataset(object):
                             label_dict[task] = "Certain"
                         else:
                             raise ValueError(f"Unsupported Certainty label '{label_dict[task]}'")  # noqa
-                label_dict = {task: self.LABEL_ENCODINGS[task][val]
-                              for (task, val) in label_dict.items()}
                 example = {"__key__": f"sample{num_processed:06d}",
                            "__url__": annfile,
                            "json": {"text": sentence["_text"],
@@ -191,14 +216,6 @@ class SemRepFactDataset(object):
                     return examples
         return examples
 
-    def tasks_filter(self, sample):
-        if self.tasks_to_load == "all":
-            return sample
-        sample["json"]["labels"] = {
-            k: v for (k, v) in sample["json"]["labels"].items()
-            if k in self.tasks_to_load}
-        return sample
-
     def split(self, examples):
         train = []
         val = []
@@ -208,39 +225,6 @@ class SemRepFactDataset(object):
             split_idx = np.random.choice(range(3), p=[0.8, 0.1, 0.1])
             splits[split_idx].append(example)
         return splits
-
-    def summarize(self):
-        for split in ["train", "val", "test"]:
-            print(split.upper())
-            print("=" * len(split))
-            split_data = getattr(self, split)
-
-            # n = len(split_data)
-            pred_counts = Counter([ex["json"]["predicate"]
-                                   for ex in split_data])
-            n = sum(pred_counts.values())
-            sorted_pred_counts = sorted(pred_counts.items(),
-                                        key=lambda x: x[0])
-            pred_counts_str = '\n    '.join(
-                [f"{key}: {val} ({(val/n)*100:.2f}%)"
-                 for (key, val) in sorted_pred_counts])
-            count_strings = {}
-            for task in self.label_spec:
-                task_counts = Counter([ex["json"]["labels"][task]
-                                       for ex in split_data])
-                sorted_task_counts = sorted(task_counts.items(),
-                                            key=lambda x: x[0])
-                task_counts_str = '\n      '.join(
-                    [f"{key}: {val} ({(val/n)*100:.2f}%)"
-                     for (key, val) in sorted_task_counts])
-                count_strings[task] = task_counts_str
-
-            print(f"  N: {n}")
-            print(f"  Predicates:\n    {pred_counts_str}")
-            print("  Labels")
-            for (task, tc) in count_strings.items():
-                print(f"    {task}:\n      {tc}")
-            print()
 
     def save(self, outdir):
         """
@@ -262,3 +246,31 @@ class SemRepFactDataset(object):
             for example in split:
                 sink.write(example)
             sink.close()
+
+    def summarize(self):
+        for split in ["train", "val", "test"]:
+            print(split.upper())
+            print("=" * len(split))
+            split_data = getattr(self, split)
+
+            n = 0
+            task_counts = defaultdict(lambda: defaultdict(int))
+            for example in tqdm(split_data):
+                n += 1
+                example = self.inverse_transform_labels(example)
+                for (task, val) in example["json"]["labels"].items():
+                    task_counts[task][val] += 1
+
+            count_strings = {}
+            for (task, counts) in task_counts.items():
+                sorted_counts = sorted(counts.items(), key=lambda x: x[0])
+                counts_str = '\n      '.join(
+                    [f"{key}: {val} ({(val/n)*100:.2f}%)"
+                     for (key, val) in sorted_counts])
+                count_strings[task] = counts_str
+
+            print(f"  N: {n}")
+            print("  Labels")
+            for (task, tc) in count_strings.items():
+                print(f"    {task}:\n      {tc}")
+            print()
