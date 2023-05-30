@@ -151,37 +151,6 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
                              "labels": batch["json"]["labels"][task]}
         return metrics
 
-    def predict_step(self, batch, batch_idx):
-        outputs_by_task = self.get_model_outputs(batch)
-        batch_cp = deepcopy(batch)
-        batch_cp["json"]["predictions"] = {}
-        batch_cp["json"]["token_masks"] = {}
-        for (task, outputs) in outputs_by_task.items():
-            softed = torch.nn.functional.softmax(outputs.logits, dim=1)
-            preds = torch.argmax(softed, dim=1)
-            batch_cp["json"]["predictions"][task] = preds
-            batch_cp["json"]["token_masks"][task] = []
-            for (i, example_mask) in enumerate(outputs.mask):
-                position_ids = batch["json"]["encoded"]["position_ids"][i]
-                levitated_idxs = batch["json"]["levitated_idxs"][i]  # noqa
-                moved_mask = self.move_levitated_mask_to_tokens(
-                    example_mask, position_ids, levitated_idxs)
-                batch_cp["json"]["token_masks"][task].append(
-                    moved_mask.squeeze())
-        return batch_cp
-
-    def move_levitated_mask_to_tokens(self, mask, position_ids, levitated_idxs):  # noqa
-        """
-        Reassign the attention probabilities from the levitated markers
-        to the tokens the stand for.
-        """
-        new_mask = torch.zeros_like(mask)
-        levitated_positions = position_ids[levitated_idxs]
-        for li in levitated_positions.unique():
-            single_span_idxs = torch.where(levitated_positions == li)
-            new_mask[li] = mask[levitated_idxs][single_span_idxs].sum()
-        return new_mask
-
     def validation_epoch_end(self, all_metrics):
         losses_by_task = defaultdict(list)
         preds_by_task = defaultdict(list)
@@ -213,7 +182,38 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
                 self.log_dict(res, prog_bar=False)
 
         self.log_dict({"avg_val_loss": np.mean(val_losses),
-                       "avg_val_f1": np.mean(f1s)})
+                       "avg_val_f1": np.mean(f1s)}, prog_bar=True)
+
+    def predict_step(self, batch, batch_idx):
+        outputs_by_task = self.get_model_outputs(batch)
+        batch_cp = deepcopy(batch)
+        batch_cp["json"]["predictions"] = {}
+        batch_cp["json"]["token_masks"] = {}
+        for (task, outputs) in outputs_by_task.items():
+            softed = torch.nn.functional.softmax(outputs.logits, dim=1)
+            preds = torch.argmax(softed, dim=1)
+            batch_cp["json"]["predictions"][task] = preds
+            batch_cp["json"]["token_masks"][task] = []
+            for (i, example_mask) in enumerate(outputs.mask):
+                position_ids = batch["json"]["encoded"]["position_ids"][i]
+                levitated_idxs = batch["json"]["levitated_idxs"][i]  # noqa
+                moved_mask = self.move_levitated_mask_to_tokens(
+                    example_mask, position_ids, levitated_idxs)
+                batch_cp["json"]["token_masks"][task].append(
+                    moved_mask.squeeze())
+        return batch_cp
+
+    def move_levitated_mask_to_tokens(self, mask, position_ids, levitated_idxs):  # noqa
+        """
+        Reassign the attention probabilities from the levitated markers
+        to the tokens the stand for.
+        """
+        new_mask = torch.zeros_like(mask)
+        levitated_positions = position_ids[levitated_idxs]
+        for li in levitated_positions.unique():
+            single_span_idxs = torch.where(levitated_positions == li)
+            new_mask[li] = mask[levitated_idxs][single_span_idxs].sum()
+        return new_mask
 
     def configure_optimizers(self):
         opt = AdamW(self.parameters(),
