@@ -11,22 +11,36 @@ config = Config("SemRepFactConfig")
 
 @config.parameter(group="Experiment", types=str)
 def name(val):
-    assert len(val) > 0
+    """
+    What to name this experiment.
+    """
+    assert val is not None
+    assert val != ''
 
 
 @config.parameter(group="Experiment", types=str)
 def logdir(val):
-    pass
+    """
+    Base directory where to save experiment logs, model checkpoints,
+    predictions, etc.
+    Actual experiment directory will be {logdir}/{name}/version_{version}/.
+    """
+    assert val is not None
+    assert val != ''
 
 
 @config.parameter(group="Experiment", default=0, types=int)
 def version(val):
+    """
+    The version number of this experiment.
+    """
+    assert val is not None
     assert val >= 0
 
 
 @config.parameter(group="Experiment", default=0, types=int)
 def random_seed(val):
-    pass
+    assert val is not None
 
 
 @config.parameter(group="Data", types=str)
@@ -86,7 +100,7 @@ def init_kwargs(val):
 @config.parameter(group="Model", default="default", types=str)
 def model_name(val):
     """
-    See MODEL_REGISTRY is models.py for valid values.
+    See MODEL_REGISTRY in models.py for valid values.
     """
     assert val in MODEL_REGISTRY.keys()
 
@@ -100,6 +114,7 @@ def bert_model_name_or_path(val):  # noqa F811 redefinition of unused 'bert_mode
 def entity_pool_fn(val):
     """
     How to pool the subject and object markers.
+    See ENTITY_POOLER_REGISTRY in models.py for valid values.
     """
     assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
 
@@ -108,6 +123,7 @@ def entity_pool_fn(val):
 def levitated_pool_fn(val):
     """
     How to pool the levitated markers, if applicable.
+    See ENTITY_POOLER_REGISTRY in models.py for valid values.
     """
     assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
 
