@@ -28,11 +28,13 @@ class Encoder(object):
                    config.Data.Encoder.max_seq_length.value)
 
     def __init__(self, bert_model_name_or_path="bert-base-uncased",
-                 max_seq_length=256):
+                 max_seq_length=256, cache=True):
         self.bert_model_name_or_path = bert_model_name_or_path
         self.max_seq_length = max_seq_length
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.bert_model_name_or_path)
+        # Whether to cache encoded examples
+        self.cache = cache
         self._cache = {}
 
     def __call__(self, examples):
@@ -52,7 +54,8 @@ class Encoder(object):
             return self._cache[key]
         except KeyError:
             encoded = self.encode_single_example(example)
-            self._cache[key] = encoded
+            if self.cache is True:
+                self._cache[key] = encoded
             return encoded
 
 
