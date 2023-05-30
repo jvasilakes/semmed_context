@@ -32,16 +32,16 @@ class SemRepFactDataset(object):
                       "AUGMENTS": 2,
                       "CAUSES": 3,
                       "COEXISTS_WITH": 4,
-                      "COMPLICATES": 5,
-                      "DISRUPTS": 6,
-                      "INHIBITS": 7,
-                      "INTERACTS_WITH": 8,
-                      "MANIFESTATION_OF": 9,
-                      "PREDISPOSES": 10,
-                      "PREVENTS": 11,
-                      "PRODUCES": 12,
-                      "STIMULATES": 13,
-                      "TREATS": 14}
+                      "DISRUPTS": 5,
+                      "INHIBITS": 6,
+                      "INTERACTS_WITH": 7,
+                      "PREDISPOSES": 8,
+                      "PREVENTS": 9,
+                      "PRODUCES": 10,
+                      "STIMULATES": 11,
+                      "TREATS": 12}
+        # "COMPLICATES" and "MANIFESTATION_OF" are omitted
+        # due to very low frequencies (0.3% and 0.2%).
     }
 
     @property
@@ -180,9 +180,6 @@ class SemRepFactDataset(object):
             anns = pybrat.BratAnnotations.from_file(annfile)
             anntxt = pybrat.BratText.from_files(sentences=jsonfile)
             for event in anns.events:
-                # Uncommitted Factuality have no certainty/polarity labels.
-                if event.attributes["Factuality"].value == "Uncommitted":
-                    continue
                 sentence = anntxt.sentences(annotations=event)[0]
                 pred, subj, obj = event.spans
                 subj = (subj.text,
@@ -195,6 +192,8 @@ class SemRepFactDataset(object):
                               for task in self.LABEL_ENCODINGS
                               if task in event.attributes}
                 label_dict["Predicate"] = pred.type
+                # Filter the labels to match the LABEL_ENCODINGS.
+                keep_example = True
                 for task in label_dict:
                     if task == "Certainty":
                         if label_dict[task] in ["L1", "L2"]:
@@ -203,6 +202,8 @@ class SemRepFactDataset(object):
                             label_dict[task] = "Certain"
                         else:
                             raise ValueError(f"Unsupported Certainty label '{label_dict[task]}'")  # noqa
+                    if label_dict[task] not in self.LABEL_ENCODINGS[task]:
+                        keep_example = False
                 example = {"__key__": f"sample{num_processed:06d}",
                            "__url__": annfile,
                            "json": {"text": sentence["_text"],
@@ -210,8 +211,9 @@ class SemRepFactDataset(object):
                                     "object": obj,
                                     "labels": label_dict}
                            }
-                examples.append(example)
-                num_processed += 1
+                if keep_example is True:
+                    examples.append(example)
+                    num_processed += 1
                 if num_processed == self.num_examples:
                     return examples
         return examples
