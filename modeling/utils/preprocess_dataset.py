@@ -7,7 +7,9 @@ from data.datasets import SemRepFactDataset  # noqa
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        """Preprocess .ann files by splitting into train, val, test,
+           and saving them as a tar archive.""")
     parser.add_argument("anndir", type=str,
                         help="Directory containing .ann and .json files.")
     parser.add_argument("outdir", type=str,
