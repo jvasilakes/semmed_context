@@ -212,7 +212,7 @@ class SemRepFactDataset(object):
                                     "labels": label_dict}
                            }
                 if keep_example is True:
-                    examples.append(example)
+                    examples.append(self.transform_labels(example))
                     num_processed += 1
                 if num_processed == self.num_examples:
                     return examples
@@ -246,7 +246,7 @@ class SemRepFactDataset(object):
         sinks = [train_sink, val_sink, test_sink]
         for (split, sink) in zip(splits, sinks):
             for example in split:
-                sink.write(example)
+                sink.write(self.inverse_transform_labels(example))
             sink.close()
 
     def summarize(self):
