@@ -1,5 +1,9 @@
 # Modeling SemRepFact
 
+This document gives an overview of training a contextualized event extraction model on SemRepFact data.
+
+## Generating the Config File
+
 First we need to generate a default experiment config file that we can later modify to run our experiments.
 
 ```
@@ -39,6 +43,26 @@ python config.py update -f path/to/config_dir/*.yaml -p Data.datadir path/to/dat
 You should fill in or modify the other values in the config file as you wish for your experiment.
 Documentation is included in the config file by default. Once you have a complete config file
 (i.e., `python config.py validate` doesn't return any warnings or errors), you can run experiments.
+
+## Re-annotating Negated Predications
+
+SemRep Factuality is actually quite poor at identifying negated predications: the accuracy of the extracted negative
+polarity predications is around 35%. We've trained a filtering model, similar to the one used to filter incorrect
+predications, which can be used to reannotate negative polarity instances.
+
+```
+python ../scripts/train_filter_model.py path/to/data/{split}.tar.gz --reannotate --task Polarity --logdir path/to/trained/modeldir/
+```
+
+where `{split}` is one of `train`, `val`, `test`. This script will use the already trained filtering model saved at
+`path/to/trained/modeldir/checkpoints/best_model.pth` to filter the data in `{split}.tar.gz`.
+The reannotated dataset will be saved at `path/to/{split}.tar.gz`, and the original will be renamed to
+`path/to/{split}.tar.gz.orig`.
+
+
+## Running Experiments
+
+Now that your data and config file is ready, you can run experiments will the following commands.
 
 ```
 python run.py train path/to/config.yaml
