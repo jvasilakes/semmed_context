@@ -14,8 +14,9 @@ class PubMedBERT(nn.Module):
         self.bert = AutoModel.from_pretrained(self.weight_path)
         self.drop = nn.Dropout(0.1, False)
         self.fc_out = nn.Linear(768, 2, True)
+        self.loss_fn = nn.CrossEntropyLoss()
 
-    def forward(self, input_ids, token_type_ids, attention_mask):
+    def forward(self, input_ids, token_type_ids, attention_mask, labels=None):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids)
@@ -23,7 +24,11 @@ class PubMedBERT(nn.Module):
         pooled_output = self.drop(pooled_output)
         logits = self.fc_out(pooled_output)
 
+        loss = None
+        if labels is not None:
+            loss = self.loss_fn(logits, labels)
+
         return modeling_outputs.SequenceClassifierOutput(
-            loss=None, logits=logits,
+            loss=loss, logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions)
