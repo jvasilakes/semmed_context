@@ -164,6 +164,7 @@ def query_sentences(db_conn, pmids):
     print("Getting sentences...", end='', flush=True)
 
     sentences = []
+    pbar = tqdm(total=len(pmids))
     try:
         cursor.execute(query)
         while True:
@@ -171,6 +172,7 @@ def query_sentences(db_conn, pmids):
             if row is None:
                 break
             sentences.append(row)
+            pbar.update()
 
     except KeyboardInterrupt:
         print("Saving sentences fetched so far.")
