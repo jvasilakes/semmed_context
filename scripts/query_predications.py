@@ -46,11 +46,11 @@ def parse_args():
                         help="Where to save the output.")
     parser.add_argument("--max-predications", type=int, default=10000,
                         help="Maximum number of predications to save.")
-    parser.add_argument("--negation-cue-list", type=str, default=None,
-                        help="""Path to file containing negation cues,
+    parser.add_argument("--cue-list", type=str, default=None,
+                        help="""Path to file containing cue words,
                                 one per line.""")
-    parser.add_argument("--certainty-cue-list", type=str, default=None,
-                        help="""Path to file containing certainty cues,
+    parser.add_argument("--ignore-pmids", type=str, default=None,
+                        help="""Path to file containing PMIDs to ignore,
                                 one per line.""")
     return parser.parse_args()
 
@@ -63,8 +63,8 @@ def main(args):
     db_conn = sqlite3.connect(args.semmeddb_sqlite)
     predications, pmids = query_predicates(
         db_conn, n=args.max_predications,
-        negation_cues_list=args.negation_cue_list,
-        certainty_cues_list=args.certainty_cue_list)
+        cue_list=args.cue_list,
+        ignore_pmid_list=args.ignore_pmids)
     sentences = query_sentences(db_conn, pmids)
     save_predications_to_brat(predications, semtype_map, args.outdir)
     save_sentences_to_json(sentences, args.outdir)
@@ -83,8 +83,7 @@ def load_semtype_map(filepath):
     return semtype_map
 
 
-def query_predicates(db_conn, n=-1, negation_cues_list=None,
-                     certainty_cues_list=None):
+def query_predicates(db_conn, n=-1, cue_list=None, ignore_pmid_list=None):
     pred_columns = ','.join(PRED_COLUMNS)
     predicates = ','.join([f"'{pred}'" for pred in PREDICATES])
     query = f"""
@@ -98,22 +97,21 @@ def query_predicates(db_conn, n=-1, negation_cues_list=None,
         ON s.PMID = c.PMID
         WHERE p.PREDICATE IN ({predicates})
     """
+    ignore_pmids = []
+    if ignore_pmid_list is not None:
+        print("Skipping some PMIDs")
+        ignore_pmids = [line.strip() for line in open(ignore_pmid_list)]
+        ignore_pmids = ','.join([f"'{pmid.strip()}'" for pmid in ignore_pmids])
+        query += f"AND s.PMID NOT IN ({ignore_pmids})"
 
     cursor = db_conn.cursor()
     print("Getting predications...", end='', flush=True)
 
-    neg_cues = []
-    if negation_cues_list is not None:
+    cues = []
+    if cue_list is not None:
         print("Getting likely negated predications...")
-        neg_cues = [line.strip().lower() for line in open(negation_cues_list)]
-
-    cert_cues = []
-    if certainty_cues_list is not None:
-        print("Getting likely uncertain predications...")
-        cert_cues = [line.strip().lower()
-                     for line in open(certainty_cues_list)]
-
-    cues = neg_cues + cert_cues
+        cues = [line.strip().lower() for line in open(cue_list)]
+    num_matched = 0
 
     pmids = set()
     predications = []
@@ -128,6 +126,8 @@ def query_predicates(db_conn, n=-1, negation_cues_list=None,
             row = cursor.fetchone()
             if row is None:
                 break
+            if row[0] in ignore_pmids:
+                continue
             # keep this example if any cues match, or
             # with a 0.1 percent chance otherwise.
             keep_prob = 1.0
@@ -135,6 +135,7 @@ def query_predicates(db_conn, n=-1, negation_cues_list=None,
                 keep_prob = 0.1
                 sentence = row[-1]
                 if match_cues(sentence, cues=cues) is True:
+                    num_matched += 1
                     keep_prob = 1.0
             keep_row = np.random.choice(
                 [True, False], p=[keep_prob, 1.0 - keep_prob]).item()
@@ -148,6 +149,9 @@ def query_predicates(db_conn, n=-1, negation_cues_list=None,
         print("Saving predications fetched so far.")
     cursor.close()
     print("Done", flush=True)
+    if len(cues) > 0:
+        perc_matched = (num_matched / len(predications)) * 100
+    print(f"{perc_matched:.2f}% predications matched cues.")
     return predications, pmids
 
 
