@@ -45,7 +45,7 @@ This script symlinks the .txt and .json files from `ann_outdir` into `filtered_o
 
 ```
 cd Bio-SCoRes
-bash bin/CoreNLP filtered_outdir/ corenlp_outdir/
+bash bin/CoreNLP filtered_outdir/ corenlp_outdir/ > corenlp.out 2> corenlp.err
 ```
 
 CoreNLP annotations will be saved as XML files in `corenlp_outdir`.
@@ -53,7 +53,7 @@ CoreNLP annotations will be saved as XML files in `corenlp_outdir`.
 There is also a parallelized version (using GNU parallel) that can be used like so
 
 ```
-bash bin/CoreNLP_parallel N filtered_outdir/ corenlp_outdir/
+bash bin/CoreNLP_parallel N filtered_outdir/ corenlp_outdir/ > corenlp.out 2> corenlp.err
 ```
 
 where `N` is an integer specifying the number of jobs.
@@ -119,7 +119,7 @@ Then, the `.ann` files in `factuality_outdir/standoff/` and the text files in `f
 "Assigning factuality values to semantic relations extracted from biomedical research literature" (Kilicoglu et al., 2017)
 
 ```
-python scripts/convert_factuality_anns.py factuality_outdir/standoff factuality_outdir/converted/
+python scripts/convert_factuality_anns.py factuality_outdir/standoff factuality_outdir/converted/ > factuality_outdir/converted.err
 ```
 
 It is helpful to have the `.ann` and `.json` files in the same directory, so we'll symlink them.
