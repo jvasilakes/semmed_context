@@ -20,9 +20,11 @@ https://doi.org/10.1371/journal.pone.0179926
 """
 
 import os
+import sys
 import argparse
 import warnings
 from glob import glob
+from tqdm import tqdm
 
 from pybrat import BratAnnotations
 
@@ -40,7 +42,7 @@ def main(args):
     os.makedirs(args.outdir, exist_ok=False)
     annglob = os.path.join(args.anndir, "*.ann")
     annfiles = glob(annglob)
-    for annfile in annfiles:
+    for annfile in tqdm(annfiles, file=sys.stdout):
         new_anns = convert_annotations(annfile)
         new_anns.save_brat(args.outdir)
 

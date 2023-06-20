@@ -1,6 +1,7 @@
 import os
 import argparse
 from glob import glob
+from tqdm import tqdm
 from collections import defaultdict
 
 from pybrat import BratAnnotations
@@ -17,7 +18,7 @@ def main(args):
     assert os.path.isdir(args.anndir)
     annglob = glob(os.path.join(args.anndir, "*.ann"))
     all_counts = None
-    for annfile in annglob:
+    for annfile in tqdm(annglob):
         counts = summarize_brat_file(annfile)
         if all_counts is None:
             all_counts = counts

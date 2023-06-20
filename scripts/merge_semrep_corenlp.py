@@ -2,6 +2,7 @@ import os
 import argparse
 import xml.etree.ElementTree as ET
 from glob import glob
+from tqdm import tqdm
 
 import pybrat
 
@@ -31,7 +32,7 @@ def main(args):
                     for fpath in xml_files}
 
     os.makedirs(args.output_dir, exist_ok=False)
-    for (pmid, annfile) in pmid2annfile.items():
+    for (pmid, annfile) in tqdm(pmid2annfile.items()):
         xmlfile = pmid2xmlfile[pmid]
         merged_xml = merge_data(annfile, xmlfile)
         outpath = os.path.join(args.output_dir, f"{pmid}.xml")
