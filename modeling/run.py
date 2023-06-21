@@ -44,7 +44,6 @@ def parse_args():
 
 
 def main(args):
-    print(args); input()
     config.load_yaml(args.config_file)
 
     start_time = datetime.now()
