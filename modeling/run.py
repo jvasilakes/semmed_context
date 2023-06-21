@@ -24,23 +24,27 @@ def parse_args():
     train_parser = subparsers.add_parser("train", help="Run model training")
     train_parser.add_argument(
         "config_file", type=str, help="Path to yaml config file.")
+    train_parser.add_argument("--quiet", action="store_true", default=False)
 
     val_parser = subparsers.add_parser("validate", help="Run model validation")
     val_parser.add_argument(
         "config_file", type=str, help="Path to yaml config file.")
     val_parser.add_argument("--split", type=str, default="val",
                             choices=["train", "val", "test"])
+    val_parser.add_argument("--quiet", action="store_true", default=False)
 
     predict_parser = subparsers.add_parser("predict", help="Run prediction")
     predict_parser.add_argument(
         "config_file", type=str, help="Path to yaml config file.")
     predict_parser.add_argument("--split", type=str, default="val",
                                 choices=["train", "val", "test"])
+    predict_parser.add_argument("--quiet", action="store_true", default=False)
 
     return parser.parse_args()
 
 
 def main(args):
+    print(args); input()
     config.load_yaml(args.config_file)
 
     start_time = datetime.now()
@@ -50,7 +54,7 @@ def main(args):
 
     pl.seed_everything(config.Experiment.random_seed.value, workers=True)
 
-    run_kwargs = {}
+    run_kwargs = {"quiet": args.quiet}
     if args.command == "train":
         run_fn = run_train
     elif args.command == "validate":
@@ -69,7 +73,7 @@ def main(args):
     print(f"  Time elapsed: {end_time - start_time}")
 
 
-def run_train(config):
+def run_train(config, quiet=False):
     logdir = config.Experiment.logdir.value
     version = config.Experiment.version.value
     exp_name = config.Experiment.name.value
@@ -104,11 +108,12 @@ def run_train(config):
         callbacks=[checkpoint_cb],
         log_every_n_steps=1,
         deterministic=True,
-        check_val_every_n_epoch=1)
+        check_val_every_n_epoch=1,
+        enable_progress_bar=not quiet)
     trainer.fit(model, datamodule=datamodule)
 
 
-def run_validate(config, datasplit):
+def run_validate(config, datasplit, quiet=False):
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
@@ -129,7 +134,8 @@ def run_validate(config, datasplit):
     trainer = pl.Trainer(
         logger=False,
         deterministic=True,
-        gpus=available_gpus)
+        gpus=available_gpus,
+        enable_progress_bar=not quiet)
 
     if datasplit == "train":
         val_dataloader_fn = datamodule.train_dataloader
@@ -147,7 +153,7 @@ def run_validate(config, datasplit):
     print(table)
 
 
-def run_predict(config, datasplit):
+def run_predict(config, datasplit, quiet=False):
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
@@ -168,7 +174,8 @@ def run_predict(config, datasplit):
     trainer = pl.Trainer(
         logger=False,
         deterministic=True,
-        gpus=available_gpus)
+        gpus=available_gpus,
+        enable_progress_bar=not quiet)
 
     if datasplit == "train":
         predict_dataloader_fn = datamodule.train_dataloader
