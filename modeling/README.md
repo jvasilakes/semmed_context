@@ -2,6 +2,17 @@
 
 This document gives an overview of training a contextualized event extraction model on SemRepFact data.
 
+## Requirements
+
+On top of the requirements needed for building the dataset, you will also need the following.
+
+ * `pandas`
+ * `pytorch_lightning==1.5.10`
+ * `scikit-learn`
+ * `spacy` with the `en_core_web_sm` model.
+ * `webdataset`
+
+
 ## Generating the Config File
 
 First we need to generate a default experiment config file that we can later modify to run our experiments.
@@ -16,6 +27,8 @@ values need filling in with
 ```
 python config.py validate path/to/config.yaml
 ```
+
+## Dataset Preprocessing
 
 One of the things the above script says we need is a valid `Data.datadir`.
 To get this, we need to prepare the dataset. We preprocess by splitting into train, val, and test, and
