@@ -57,8 +57,8 @@ def main(args):
     model = PubMedBERT()
     tokenizer = AutoTokenizer.from_pretrained(model.weight_path)
     raw_data = list(load_raw_examples(args.datadir))
+    keep_label = None
     if args.reannotate is True:
-        keep_label = None
         if args.task == "Polarity":
             keep_label = "Negative"
         elif args.task == "Certainty":
@@ -238,13 +238,15 @@ def reannotate(model, dataloader, raw_examples, task, datadir, label_set):
     os.rename(datadir, f"{datadir}.orig")
     reannotated = 0
     with tarfile.open(datadir, "w:gz") as tarF:
-        #for (eid, pred) in preds_by_eid.items():
         for (eid, example) in raw_examples.items():
             try:
                 pred = preds_by_eid[eid]
             except KeyError:
                 pred = -1
-            if pred == 0:  # incorrect
+            if pred == -1:  # not predicted
+                raw_examples[eid]["predicate"] = raw_examples[eid]["labels"]["Predicate"]  # noqa
+                raw_examples[eid]["correct"] = pred
+            elif pred == 0:  # incorrect
                 reannotated += 1
                 bad_label = raw_examples[eid]["labels"][task]
                 fixed_label = list(label_set - set([bad_label]))[0]
