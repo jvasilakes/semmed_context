@@ -241,9 +241,8 @@ def unbatch(batches, ignore_keys=[]):
                 else:
                     converted = maybe_convert(batch[key][i])
                 datum[key] = converted
-            yield datum
-#            unbatched.append(datum)
-#    return unbatched
+            unbatched.append(datum)
+    return unbatched
 
 
 def maybe_convert(value):
