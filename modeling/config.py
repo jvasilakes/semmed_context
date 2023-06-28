@@ -3,7 +3,7 @@ import os
 from experiment_config import Config, get_and_run_config_command
 
 from data.encoders import ENCODER_REGISTRY
-from models import MODEL_REGISTRY, ENTITY_POOLER_REGISTRY
+from models import MODEL_REGISTRY, ENTITY_POOLER_REGISTRY, LOSS_REGISTRY
 
 
 config = Config("SemRepFactConfig")
@@ -151,6 +151,14 @@ def weight_decay(val):
 @config.parameter(group="Training", default=0.0, types=float)
 def dropout_prob(val):
     assert val >= 0.0
+
+
+@config.parameter(group="Training", default="cross_entropy", types=str)
+def loss_fn(val):
+    """
+    See LOSS_REGISTRY in models.py for valid values.
+    """
+    assert val in LOSS_REGISTRY.keys()
 
 
 @config.on_load

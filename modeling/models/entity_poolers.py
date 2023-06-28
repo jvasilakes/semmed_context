@@ -160,3 +160,13 @@ class SoftmaxAttentionEntityPooler(BaseAttentionEntityPooler):
         projection_fn = torch.nn.Softmax(dim=0)
         return self.generic_attention_pooler(
             masked_hidden, entity_mask, pooled_entities, projection_fn)
+
+
+@register_entity_pooler("attention-sparsegen")
+class SparsegenAttentionEntityPooler(BaseAttentionEntityPooler):
+
+    def pool_fn(self, masked_hidden, entity_mask, pooled_entities):
+        raise NotImplementedError()
+        # projection_fn = SparsegenLin(dim=0)
+        # return self.generic_attention_pooler(
+        #     masked_hidden, entity_mask, pooled_entities, projection_fn)

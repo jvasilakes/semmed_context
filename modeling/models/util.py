@@ -16,3 +16,13 @@ def register_entity_pooler(name):
         ENTITY_POOLER_REGISTRY[name] = cls
         return cls
     return add_to_registry
+
+
+LOSS_REGISTRY = {}
+
+
+def register_loss(name):
+    def add_to_registry(cls):
+        LOSS_REGISTRY[name] = cls
+        return cls
+    return add_to_registry

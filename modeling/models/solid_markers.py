@@ -12,7 +12,7 @@ from transformers import logging as transformers_logging
 from transformers.modeling_outputs import SequenceClassifierOutput
 from sklearn.metrics import precision_recall_fscore_support
 
-from .util import register_model, ENTITY_POOLER_REGISTRY
+from .util import register_model, ENTITY_POOLER_REGISTRY, LOSS_REGISTRY
 
 
 # Ignore warning that BertModel is not using some parameters.
@@ -24,8 +24,10 @@ class SolidMarkerClassificationModel(pl.LightningModule):
 
     @classmethod
     def from_config(cls, config, label_spec):
+        loss = LOSS_REGISTRY[config.Training.loss_fn.value](reduction="mean")
         return cls(config.Model.bert_model_name_or_path.value,
                    label_spec=label_spec,
+                   loss_fn=loss,
                    entity_pool_fn=config.Model.entity_pool_fn.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
@@ -35,6 +37,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
             self,
             bert_model_name_or_path,
             label_spec,
+            loss_fn,
             entity_pool_fn,
             lr=1e-3,
             weight_decay=0.0,
@@ -42,6 +45,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         super().__init__()
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
+        self.loss_fn = loss_fn
         self.entity_pool_fn = entity_pool_fn
         self.lr = lr
         self.weight_decay = weight_decay
@@ -65,8 +69,6 @@ class SolidMarkerClassificationModel(pl.LightningModule):
                 nn.Dropout(self.dropout_prob),
                 nn.Linear(classifier_insize, num_labels)
             )
-
-        self.loss_fn = nn.CrossEntropyLoss(reduction="mean")
 
         self.save_hyperparameters()
 
