@@ -12,7 +12,7 @@ from transformers import logging as transformers_logging
 from transformers.modeling_outputs import SequenceClassifierOutput
 from sklearn.metrics import precision_recall_fscore_support
 
-from .util import register_model
+from .util import register_model, LOSS_REGISTRY
 
 
 # Ignore warning that BertModel is not using some parameters.
@@ -24,9 +24,11 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
 
     @classmethod
     def from_config(cls, config, label_spec):
+        loss = LOSS_REGISTRY[config.Training.loss_fn.value](reduction="mean")
         return cls(config.Model.bert_model_name_or_path.value,
                    label_spec=label_spec,
                    lr=config.Training.lr.value,
+                   loss_fn=loss,
                    weight_decay=config.Training.weight_decay.value,
                    dropout_prob=config.Training.dropout_prob.value)
 
@@ -34,12 +36,14 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
             self,
             bert_model_name_or_path,
             label_spec,
+            loss_fn,
             lr=1e-3,
             weight_decay=0.0,
             dropout_prob=0.0):
         super().__init__()
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
+        self.loss_fn = loss_fn
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout_prob = dropout_prob
@@ -56,8 +60,6 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
                 nn.Dropout(self.dropout_prob),
                 nn.Linear(classifier_insize, num_labels)
             )
-
-        self.loss_fn = nn.CrossEntropyLoss(reduction="mean")
 
         self.save_hyperparameters()
 

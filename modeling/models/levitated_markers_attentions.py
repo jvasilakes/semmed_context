@@ -14,7 +14,7 @@ from transformers import logging as transformers_logging
 from transformers.file_utils import ModelOutput
 from sklearn.metrics import precision_recall_fscore_support
 
-from .util import register_model, ENTITY_POOLER_REGISTRY
+from .util import register_model, ENTITY_POOLER_REGISTRY, LOSS_REGISTRY
 
 
 # Ignore warning that BertModel is not using some parameters.
@@ -37,8 +37,10 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
 
     @classmethod
     def from_config(cls, config, label_spec):
+        loss = LOSS_REGISTRY[config.Training.loss_fn.value](reduction="mean")
         return cls(config.Model.bert_model_name_or_path.value,
                    label_spec=label_spec,
+                   loss_fn=loss,
                    entity_pool_fn=config.Model.entity_pool_fn.value,
                    levitated_pool_fn=config.Model.levitated_pool_fn.value,
                    lr=config.Training.lr.value,
@@ -49,6 +51,7 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
             self,
             bert_model_name_or_path,
             label_spec,
+            loss_fn,
             entity_pool_fn,
             levitated_pool_fn,
             lr=1e-3,
@@ -57,6 +60,7 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         super().__init__()
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
+        self.loss_fn = loss_fn
         self.entity_pool_fn = entity_pool_fn
         self.levitated_pool_fn = levitated_pool_fn
         self.lr = lr
@@ -86,7 +90,6 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
             self.levitated_poolers[task] = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](  # noqa
                 pooler_insize, pooler_outsize)
 
-        self.loss_fn = nn.CrossEntropyLoss(reduction="mean")
         self.save_hyperparameters()
 
     def forward(self, bert_inputs, entity_token_idxs,
