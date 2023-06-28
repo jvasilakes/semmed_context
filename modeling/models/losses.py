@@ -18,4 +18,4 @@ class InverseFocalLoss(torch.nn.Module):
     def forward(self, inputs, targets):
         # 1 - targets because this loss assumes 0 is the minority class
         return torchvision.ops.sigmoid_focal_loss(
-                inputs, 1 - targets, reduction=self.reduction)
+                inputs[:, 0], 1 - targets, reduction=self.reduction)
