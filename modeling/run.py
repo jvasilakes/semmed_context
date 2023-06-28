@@ -241,8 +241,9 @@ def unbatch(batches, ignore_keys=[]):
                 else:
                     converted = maybe_convert(batch[key][i])
                 datum[key] = converted
-            unbatched.append(datum)
-    return unbatched
+            yield datum
+#            unbatched.append(datum)
+#    return unbatched
 
 
 def maybe_convert(value):
@@ -276,8 +277,9 @@ def decode_and_split_by_task(unbatched, datamodule):
             if "token_masks" in excp["json"].keys():
                 masks = excp["json"].pop("token_masks")
                 excp["json"]["token_mask"] = masks[task][:seq_len]
-            examples_by_task[task].append(excp)
-    return examples_by_task
+            yield excp
+#            examples_by_task[task].append(excp)
+#    return examples_by_task
 
 
 def format_results_as_markdown_table(results_dict):
