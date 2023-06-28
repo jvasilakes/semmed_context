@@ -3,6 +3,7 @@ import json
 import argparse
 import warnings
 from glob import glob
+from tqdm import tqdm
 from copy import deepcopy
 from datetime import datetime
 from collections import defaultdict
@@ -198,7 +199,7 @@ def run_predict(config, datasplit, quiet=False):
                    "position_ids", "levitated_idxs"]
     preds = unbatch(preds, ignore_keys=ignore_keys)
     preds_by_task = decode_and_split_by_task(preds, datamodule)
-    for (task, preds) in preds_by_task.items():
+    for (task, preds) in tqdm(preds_by_task.items(), desc="Saving..."):
         outdir = os.path.join(preddir, datasplit)
         os.makedirs(outdir, exist_ok=True)
         outfile = os.path.join(outdir, f"{task}.jsonl")
