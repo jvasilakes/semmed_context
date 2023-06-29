@@ -199,15 +199,16 @@ def run_predict(config, datasplit, quiet=False):
                    "position_ids", "levitated_idxs"]
     preds = unbatch(preds, ignore_keys=ignore_keys)
     preds_by_task = decode_and_split_by_task(preds, datamodule)
-    for (task, preds) in tqdm(preds_by_task.items(), desc="Saving..."):
+    created_outfile = []
+    for (task, pred) in tqdm(preds_by_task, desc="Saving..."):
         outdir = os.path.join(preddir, datasplit)
-        os.makedirs(outdir, exist_ok=True)
         outfile = os.path.join(outdir, f"{task}.jsonl")
-        for pred in preds:
-            with open(outfile, 'w') as outF:
-                for pred in preds:
-                    json.dump(pred, outF)
-                    outF.write('\n')
+        if task not in created_outfile:
+            os.makedirs(outdir, exist_ok=True)
+            created_outfile.append(task)
+        with open(outfile, 'a') as outF:
+            json.dump(pred, outF)
+            outF.write('\n')
 
 
 def find_model_checkpoint(config):
@@ -260,7 +261,6 @@ def maybe_convert(value):
 
 
 def decode_and_split_by_task(unbatched, datamodule):
-    examples_by_task = defaultdict(list)
     for example in unbatched:
         for task in example["json"]["labels"].keys():
             excp = deepcopy(example)
@@ -271,14 +271,12 @@ def decode_and_split_by_task(unbatched, datamodule):
             excp["json"]["task"] = task
             labels = excp["json"].pop("labels")
             excp["json"]["label"] = datamodule.dataset.INVERSE_LABEL_ENCODINGS[task][labels[task]]  # noqa
-            preds = excp["json"].pop("predictions")
+            preds = excp.pop("predictions")
             excp["json"]["prediction"] = datamodule.dataset.INVERSE_LABEL_ENCODINGS[task][preds[task]]  # noqa
             if "token_masks" in excp["json"].keys():
                 masks = excp["json"].pop("token_masks")
                 excp["json"]["token_mask"] = masks[task][:seq_len]
-            yield excp
-#            examples_by_task[task].append(excp)
-#    return examples_by_task
+            yield task, excp
 
 
 def format_results_as_markdown_table(results_dict):
