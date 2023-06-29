@@ -266,7 +266,10 @@ def decode_and_split_by_task(unbatched, datamodule):
             excp = deepcopy(example)
             encodings = excp["json"].pop("encoded")
             input_ids = encodings["input_ids"]
-            seq_len = input_ids.index(0)
+            try:
+                seq_len = input_ids.index(0)
+            except ValueError:  # 0 is not in input_ids
+                seq_len = len(input_ids)
             excp["json"]["tokens"] = datamodule.tokenizer.convert_ids_to_tokens(input_ids[:seq_len])  # noqa
             excp["json"]["task"] = task
             labels = excp["json"].pop("labels")
