@@ -274,7 +274,7 @@ def decode_and_split_by_task(unbatched, datamodule):
             excp["json"]["task"] = task
             labels = excp["json"].pop("labels")
             excp["json"]["label"] = datamodule.dataset.INVERSE_LABEL_ENCODINGS[task][labels[task]]  # noqa
-            preds = excp.pop("predictions")
+            preds = excp["json"].pop("predictions")
             excp["json"]["prediction"] = datamodule.dataset.INVERSE_LABEL_ENCODINGS[task][preds[task]]  # noqa
             if "token_masks" in excp["json"].keys():
                 masks = excp["json"].pop("token_masks")

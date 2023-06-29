@@ -109,11 +109,11 @@ class BertForMultiTaskSequenceClassification(pl.LightningModule):
         outputs_by_task = self(batch["json"]["encoded"],
                                labels=batch["json"]["labels"])
         batch_cp = deepcopy(batch)
-        batch_cp["predictions"] = {}
+        batch_cp["json"]["predictions"] = {}
         for (task, outputs) in outputs_by_task.items():
             softed = torch.nn.functional.softmax(outputs.logits, dim=1)
             preds = torch.argmax(softed, dim=1)
-            batch_cp["predictions"][task] = preds
+            batch_cp["json"]["predictions"][task] = preds
         return batch_cp
 
     def validation_epoch_end(self, all_metrics):
