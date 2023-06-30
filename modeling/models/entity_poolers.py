@@ -144,7 +144,10 @@ class BaseAttentionEntityPooler(BaseEntityPooler):
             masked_scores = torch.masked_select(
                 attention_scores[example_idx],
                 attention_mask[example_idx].unsqueeze(1))
-            probs = projection_fn(masked_scores)
+            if masked_scores.nelement() == 0:
+                probs = torch.empty_like(masked_scores)
+            else:
+                probs = projection_fn(masked_scores)
             prob_idxs = attention_mask[example_idx]
             attention_probs[example_idx][prob_idxs] = probs.unsqueeze(1)
         # Scale the token representations by their attention probabilities
