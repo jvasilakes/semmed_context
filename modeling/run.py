@@ -107,7 +107,7 @@ def run_train(config, quiet=False):
         logger=logger,
         callbacks=[checkpoint_cb],
         log_every_n_steps=1,
-        deterministic=True,
+        deterministic="warn",
         check_val_every_n_epoch=1,
         enable_progress_bar=not quiet)
     trainer.fit(model, datamodule=datamodule)
@@ -133,7 +133,7 @@ def run_validate(config, datasplit, quiet=False):
 
     trainer = pl.Trainer(
         logger=False,
-        deterministic=True,
+        deterministic="warn",
         gpus=available_gpus,
         enable_progress_bar=not quiet)
 
@@ -173,7 +173,7 @@ def run_predict(config, datasplit, quiet=False):
 
     trainer = pl.Trainer(
         logger=False,
-        deterministic=True,
+        deterministic="warn",
         gpus=available_gpus,
         enable_progress_bar=not quiet)
 
