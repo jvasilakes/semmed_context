@@ -5,7 +5,6 @@ import warnings
 import torch
 import numpy as np
 from transformers import AutoTokenizer
-from spacy.lang.en.stop_words import STOP_WORDS
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -228,13 +227,11 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
                  bert_model_name_or_path="bert-base-uncased",
                  max_seq_length=256,
                  levitated_window_size=4,
-                 max_num_markers=40,
-                 ignore_stopwords=False
+                 max_num_markers=40
                  ):
         super().__init__(bert_model_name_or_path, max_seq_length)
         self.levitated_window_size = levitated_window_size
         self.max_num_markers = max_num_markers
-        self.ignore_stopwords = ignore_stopwords
 
     def encode_single_example(self, example):
         data = example["json"]
@@ -271,8 +268,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
             encoded, [pack_on[insert_order]])
 
         spans_to_mark = self.get_levitated_spans(
-            packed_encoded["input_ids"][0], new_entity_idxs,
-            ignore_stopwords=self.ignore_stopwords)
+            packed_encoded["input_ids"][0], new_entity_idxs)
         spans_before_entity = [(s, e) for (s, e) in spans_to_mark
                                if e < new_entity_idxs[0][0][0]]
         spans_between = [(s, e) for (s, e) in spans_to_mark
@@ -306,7 +302,7 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         data["levitated_idxs"] = padded_lev_spans
         return example
 
-    def get_levitated_spans(self, input_ids, entity_idxs, ignore_stopwords=None):  # noqa
+    def get_levitated_spans(self, input_ids, entity_idxs):
 
         entity_starts_ends = torch.stack(
             [torch.as_tensor(idxs) for idxs in entity_idxs[0]])
@@ -327,17 +323,15 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
 
         tokens = self.tokenizer.convert_ids_to_tokens(input_ids)
         token_spans = self.collapse_wordpiece_spans(
-            tokens, levitated_idxs,
-            ignore_stopwords=ignore_stopwords)
+            tokens, levitated_idxs)
         return token_spans
 
-    def collapse_wordpiece_spans(self, tokens, token_idxs, ignore_stopwords=False):  # noqa
+    def collapse_wordpiece_spans(self, tokens, token_idxs):
         out_token_spans = []
         current_token_span = []
         # Always ignore punctuation
         ignore_tokens = set(string.punctuation)
-        if ignore_stopwords is True:
-            ignore_tokens = STOP_WORDS.union(set(string.punctuation))
+        ignore_tokens = set(string.punctuation)
         for idx in token_idxs:
             wp = tokens[idx]
             if wp.startswith("##"):
