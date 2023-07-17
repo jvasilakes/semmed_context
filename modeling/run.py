@@ -197,7 +197,10 @@ def run_predict(config, datasplit, quiet=False):
     preds = unbatch(preds, ignore_keys=ignore_keys)
     preds_by_task = decode_and_split_by_task(preds, datamodule)
     created_outfile = []
-    for (task, pred) in tqdm(preds_by_task, desc="Saving..."):
+    print("Saving...")
+    if quiet is False:
+        pbar = tqdm()
+    for (task, pred) in preds_by_task:
         outdir = os.path.join(preddir, datasplit)
         outfile = os.path.join(outdir, f"{task}.jsonl")
         if task not in created_outfile:
@@ -206,6 +209,8 @@ def run_predict(config, datasplit, quiet=False):
         with open(outfile, 'a') as outF:
             json.dump(pred, outF)
             outF.write('\n')
+        if quiet is False:
+            pbar.update()
 
 
 def find_model_checkpoint(config):
