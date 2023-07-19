@@ -51,7 +51,7 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
         self.label_spec = label_spec
         self.loss_fn = loss_fn
         self.entity_pool_fn = entity_pool_fn
-        self.project_entites = project_entities
+        self.project_entities = project_entities
         self.levitated_pool_fn = levitated_pool_fn
         self.lr = lr
         self.weight_decay = weight_decay
