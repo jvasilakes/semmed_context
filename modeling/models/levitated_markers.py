@@ -63,20 +63,19 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
             self.bert_model_name_or_path, config=self.bert_config)
 
         # Multiply by 2 because we have subject and object.
-        pooler_insize = 2 * self.bert_config.hidden_size
-        pooler_outsize = self.bert_config.hidden_size
+        entity_pooler_insize = 2 * self.bert_config.hidden_size
+        entity_pooler_outsize = self.bert_config.hidden_size
         if self.project_entities is False:
-            pooler_outsize = pooler_insize
+            entity_pooler_outsize = entity_pooler_insize
         self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
-            pooler_insize, pooler_outsize)
+            entity_pooler_insize, entity_pooler_outsize)
 
+        lev_pooler_insize = lev_pooler_outsize = self.bert_config.hidden_size
         self.levitated_pooler = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](
-            pooler_insize, pooler_outsize)
+            lev_pooler_insize, lev_pooler_outsize)
 
         self.classifier_heads = nn.ModuleDict()
-        # Multiply by 2 because we'll concat entity and
-        # levitated marker representations.
-        classifier_insize = 2 * pooler_outsize
+        classifier_insize = entity_pooler_outsize + lev_pooler_outsize
         for (task, num_labels) in label_spec.items():
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),
