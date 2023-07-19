@@ -68,7 +68,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
             pooler_insize, pooler_outsize)
 
         self.classifier_heads = nn.ModuleDict()
-        classifier_insize = self.bert_config.hidden_size
+        classifier_insize = pooler_outsize
         for (task, num_labels) in label_spec.items():
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),

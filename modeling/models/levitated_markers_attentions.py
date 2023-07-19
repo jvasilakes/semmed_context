@@ -87,7 +87,7 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         self.levitated_poolers = nn.ModuleDict()
         # Multiply by 2 because we'll concat entity and
         # levitated marker representations.
-        classifier_insize = 2 * self.bert_config.hidden_size
+        classifier_insize = pooler_outsize
         for (task, num_labels) in label_spec.items():
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),
