@@ -29,7 +29,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
                    label_spec=label_spec,
                    loss_fn=loss,
                    entity_pool_fn=config.Model.entity_pool_fn.value,
-                   project_entities=config.ModelOutput.project_entities.value,
+                   project_entities=config.Model.project_entities.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
                    dropout_prob=config.Training.dropout_prob.value)
