@@ -93,7 +93,7 @@ def run_train(config, quiet=False):
 
     filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
-        monitor="avg_val_loss", mode="min", filename=filename_fmt)
+        monitor="avg_val_f1", mode="max", filename=filename_fmt)
 
     if torch.cuda.is_available():
         available_gpus = min(1, torch.cuda.device_count())
