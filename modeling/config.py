@@ -119,6 +119,17 @@ def entity_pool_fn(val):
     assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
 
 
+@config.parameter(group="Model", default=True, types=bool)
+def project_entities(val):
+    """
+    If True, h_p = f([PLM(h_s); PLM(h_o)]))
+        dim(h_p) == bert_config.hidden_size
+    If False, h_p = [PLM(h_s); PLM(h_o)]))
+        dim(h_p) == 2 * bert_config.hidden_size
+    """
+    pass
+
+
 @config.parameter(group="Model", default="max", types=(str, type(None)))
 def levitated_pool_fn(val):
     """

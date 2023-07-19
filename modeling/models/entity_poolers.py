@@ -34,8 +34,11 @@ class BaseEntityPooler(torch.nn.Module):
         # Then we concatenate the entity representations for each
         # entity function.
         all_pooled = torch.cat(all_pooled, dim=1)
-        # and project it down.
-        projected = self.output_layer(all_pooled)
+        # and project it down, if the outsize is different.
+        if self.outsize == self.insize:
+            projected = all_pooled
+        else:
+            projected = self.output_layer(all_pooled)
         return projected
 
     def string(self):
