@@ -29,6 +29,7 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
                    label_spec=label_spec,
                    loss_fn=loss,
                    entity_pool_fn=config.Model.entity_pool_fn.value,
+                   project_entities=config.ModelOutput.project_entities.value,
                    levitated_pool_fn=config.Model.levitated_pool_fn.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
@@ -40,6 +41,7 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
             label_spec,
             loss_fn,
             entity_pool_fn,
+            project_entities,
             levitated_pool_fn,
             lr=1e-3,
             weight_decay=0.0,
@@ -49,6 +51,7 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
         self.label_spec = label_spec
         self.loss_fn = loss_fn
         self.entity_pool_fn = entity_pool_fn
+        self.project_entites = project_entities
         self.levitated_pool_fn = levitated_pool_fn
         self.lr = lr
         self.weight_decay = weight_decay
@@ -59,10 +62,13 @@ class LevitatedMarkerClassificationModel(pl.LightningModule):
         self.bert = BertModel.from_pretrained(
             self.bert_model_name_or_path, config=self.bert_config)
 
-        pooler_insize = pooler_outsize = self.bert_config.hidden_size
         # Multiply by 2 because we have subject and object.
+        pooler_insize = 2 * self.bert_config.hidden_size
+        pooler_outsize = self.bert_config.hidden_size
+        if self.project_entities is False:
+            pooler_outsize = pooler_insize
         self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
-            2 * pooler_insize, pooler_outsize)
+            pooler_insize, pooler_outsize)
 
         self.levitated_pooler = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](
             pooler_insize, pooler_outsize)

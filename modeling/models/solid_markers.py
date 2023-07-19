@@ -29,6 +29,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
                    label_spec=label_spec,
                    loss_fn=loss,
                    entity_pool_fn=config.Model.entity_pool_fn.value,
+                   project_entities=config.ModelOutput.project_entities.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
                    dropout_prob=config.Training.dropout_prob.value)
@@ -39,6 +40,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
             label_spec,
             loss_fn,
             entity_pool_fn,
+            project_entities,
             lr=1e-3,
             weight_decay=0.0,
             dropout_prob=0.0):
@@ -47,6 +49,7 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         self.label_spec = label_spec
         self.loss_fn = loss_fn
         self.entity_pool_fn = entity_pool_fn
+        self.project_entites = project_entities
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout_prob = dropout_prob
@@ -56,9 +59,11 @@ class SolidMarkerClassificationModel(pl.LightningModule):
         self.bert = BertModel.from_pretrained(
             self.bert_model_name_or_path, config=self.bert_config)
 
-        # Times two because we have the subject and object representations.
+        # Multiply by 2 because we have subject and object.
         pooler_insize = 2 * self.bert_config.hidden_size
         pooler_outsize = self.bert_config.hidden_size
+        if self.project_entities is False:
+            pooler_outsize = pooler_insize
         self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
             pooler_insize, pooler_outsize)
 
