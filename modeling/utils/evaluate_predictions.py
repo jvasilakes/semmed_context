@@ -50,7 +50,7 @@ def print_confusion_matrix(cm):
     print("\u0332".join(header + "  "))
     for i in range(num_labs):
         row_strs = [f"{s:<{max_count_len}}" for s in row_data[i]]
-        print(f"{i}    │ {' '.join(row_strs)}")
+        print(f"{i:<5}│ {' '.join(row_strs)}")
 
 
 if __name__ == "__main__":
