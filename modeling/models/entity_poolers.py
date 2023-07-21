@@ -81,9 +81,9 @@ class FirstEntityPooler(BaseEntityPooler):
 
 class BaseAttentionEntityPooler(BaseEntityPooler):
 
-    def __init__(self, insize, outsize):
+    def __init__(self, insize, outsize, alignment_insize):
         super().__init__(insize, outsize)
-        self.alignment_model = torch.nn.Linear(2 * insize, 1)
+        self.alignment_model = torch.nn.Linear(alignment_insize, 1)
 
     def forward(self, hidden, token_idxs, pooled_entities):
         """
@@ -100,8 +100,11 @@ class BaseAttentionEntityPooler(BaseEntityPooler):
         # E.g., all subjects in a batch, then all objects.
         for entity_idxs in token_idxs:
             # So we create a batched entity mask for each function
+            mask_size = torch.as_tensor(hidden.size())
+            mask_size[-1] = 1
+            mask_size = torch.Size(mask_size)
             entity_mask = self.get_token_mask_from_indices(
-                entity_idxs, hidden.size())
+                entity_idxs, mask_size)
             entity_mask = entity_mask.to(hidden.device)
             masked_hidden = hidden * entity_mask
             pooled, attentions = self.pool_fn(

@@ -79,11 +79,15 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         entity_pooler_insize = 2 * self.bert_config.hidden_size
         entity_pooler_outsize = self.bert_config.hidden_size
         if self.project_entities is False:
+            # Don't project the entities down, so keep outsize equal to insize
             entity_pooler_outsize = entity_pooler_insize
         self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
             entity_pooler_insize, entity_pooler_outsize)
 
         lev_pooler_insize = lev_pooler_outsize = self.bert_config.hidden_size
+        # The alignment model computes attentions between the entity_pooler
+        # output and the hidden representations of each token.
+        lev_alignment_insize = entity_pooler_outsize + self.bert_config.hidden_size  # noqa
         self.classifier_heads = nn.ModuleDict()
         self.levitated_poolers = nn.ModuleDict()
         classifier_insize = entity_pooler_outsize + lev_pooler_outsize
@@ -93,7 +97,7 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
                 nn.Linear(classifier_insize, num_labels)
             )
             self.levitated_poolers[task] = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](  # noqa
-                lev_pooler_insize, lev_pooler_outsize)
+                lev_pooler_insize, lev_pooler_outsize, lev_alignment_insize)
 
         self.save_hyperparameters()
 
