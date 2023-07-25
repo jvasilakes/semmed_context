@@ -299,6 +299,9 @@ class LevitatedMarkerEncoder(SolidMarkerEncoder):
         pad_amount = self.max_num_markers - len(spans_in_window)
         padded_lev_spans = torch.as_tensor(
             lev_marker_idxs[0] + [[0, 0] for _ in range(pad_amount)])
+        if padded_lev_spans.sum() == 0:
+            warnings.warn("No levitated spans found.")
+            return None
         data["levitated_idxs"] = padded_lev_spans
         return example
 

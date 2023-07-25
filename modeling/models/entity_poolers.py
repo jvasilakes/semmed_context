@@ -64,8 +64,9 @@ class MaxEntityPooler(BaseEntityPooler):
         # hidden dimensions if the non-masked values are all negative.
         masked_hidden[torch.logical_not(token_mask)] = -torch.inf
         pooled = torch.max(masked_hidden, axis=1)[0]
-        # Just in case all values are -inf
-        pooled = torch.nan_to_num(pooled)
+        if torch.isinf(pooled).all():
+            raise ValueError("No masked values found in MaxEntityPooler")
+        pooled = torch.nan_to_num(pooled, neginf=-1.0)
         return pooled
 
 
