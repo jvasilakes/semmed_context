@@ -14,7 +14,8 @@ from transformers import logging as transformers_logging
 from transformers.file_utils import ModelOutput
 from sklearn.metrics import precision_recall_fscore_support
 
-from .util import register_model, ENTITY_POOLER_REGISTRY, LOSS_REGISTRY
+from .util import (register_model, ENTITY_POOLER_REGISTRY,
+                   TASK_ENCODER_REGISTRY, LOSS_REGISTRY)
 
 
 # Ignore warning that BertModel is not using some parameters.
@@ -41,6 +42,8 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         return cls(config.Model.bert_model_name_or_path.value,
                    label_spec=label_spec,
                    loss_fn=loss,
+                   task_encoder_type=config.Model.TaskEncoder.encoder_type.value,  # noqa
+                   task_encoder_kwargs=config.Model.TaskEncoder.init_kwargs.value,  # noqa
                    entity_pool_fn=config.Model.entity_pool_fn.value,
                    project_entities=config.Model.project_entities.value,
                    levitated_pool_fn=config.Model.levitated_pool_fn.value,
@@ -53,6 +56,8 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
             bert_model_name_or_path,
             label_spec,
             loss_fn,
+            task_encoder_type,
+            task_encoder_kwargs,
             entity_pool_fn,
             project_entities,
             levitated_pool_fn,
@@ -63,6 +68,8 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
         self.loss_fn = loss_fn
+        self.task_encoder_type = task_encoder_type
+        self.task_encoder_kwargs = task_encoder_kwargs
         self.entity_pool_fn = entity_pool_fn
         self.project_entities = project_entities
         self.levitated_pool_fn = levitated_pool_fn
@@ -88,16 +95,19 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         # The alignment model computes attentions between the entity_pooler
         # output and the hidden representations of each token.
         lev_alignment_insize = entity_pooler_outsize + self.bert_config.hidden_size  # noqa
-        self.classifier_heads = nn.ModuleDict()
-        self.levitated_poolers = nn.ModuleDict()
         classifier_insize = entity_pooler_outsize + lev_pooler_outsize
+        self.task_encoders = nn.ModuleDict()
+        self.levitated_poolers = nn.ModuleDict()
+        self.classifier_heads = nn.ModuleDict()
         for (task, num_labels) in label_spec.items():
+            self.task_encoders[task] = TASK_ENCODER_REGISTRY[self.task_encoder_type](  # noqa
+                self.bert_config, **self.task_encoder_kwargs)
+            self.levitated_poolers[task] = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](  # noqa
+                lev_pooler_insize, lev_pooler_outsize, lev_alignment_insize)
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),
                 nn.Linear(classifier_insize, num_labels)
             )
-            self.levitated_poolers[task] = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](  # noqa
-                lev_pooler_insize, lev_pooler_outsize, lev_alignment_insize)
 
         self.save_hyperparameters()
 

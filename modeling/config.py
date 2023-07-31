@@ -139,6 +139,24 @@ def levitated_pool_fn(val):
     assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
 
 
+@config.parameter(group="Model.TaskEncoder", default="identity", types=str)
+def encoder_type(val):
+    """
+    identity: No task-specific encoder between final BERT layer and entity poolers.
+    bert-layer: Use another BertLayer for each task.
+    bert-attention: Use a BertAttention mechanism for each task.
+    """
+    assert val in ["identity", "bert-layer", "bert-attention"]
+
+
+@config.parameter(group="Model.TaskEncoder", default={}, types=dict)
+def init_kwargs(val):
+    """
+    Optional keyword arguments to pass to the task encoder.
+    """
+    pass
+
+
 @config.parameter(group="Training", default=1, types=int)
 def epochs(val):
     assert val > 0

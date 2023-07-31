@@ -1,7 +1,10 @@
-from .util import MODEL_REGISTRY, ENTITY_POOLER_REGISTRY, LOSS_REGISTRY  # noqa F401
+from .util import (MODEL_REGISTRY, TASK_ENCODER_REGISTRY, ENTITY_POOLER_REGISTRY, LOSS_REGISTRY)  # noqa F401
 
 # The imports below populate LOSS_REGISTRY
 from .losses import InverseFocalLoss  # noqa F401
+
+# The imports below populate TASK_ENCODER_REGISTRY
+from .task_encoders import BertAttentionEncoder  # noqa F401
 
 # The imports below populate ENTITY_POOLER_REGISTRY
 from .entity_poolers import (FirstEntityPooler, MaxEntityPooler,  # noqa F401
