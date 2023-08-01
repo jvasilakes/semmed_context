@@ -77,7 +77,9 @@ def run_train(config, quiet=False):
     logdir = config.Experiment.logdir.value
     version = config.Experiment.version.value
     exp_name = config.Experiment.name.value
-    version_dir = os.path.join(logdir, exp_name, f"version_{version}")
+    seed = config.Experiment.random_seed.value
+    version_str = f"version_{version}/seed_{seed}"
+    version_dir = os.path.join(logdir, exp_name, version_str)
     os.makedirs(version_dir, exist_ok=False)
     config.yaml(outpath=os.path.join(version_dir, "config.yaml"))
 
@@ -89,7 +91,7 @@ def run_train(config, quiet=False):
     model.train()
 
     logger = TensorBoardLogger(
-        save_dir=logdir, version=version, name=exp_name)
+        save_dir=logdir, version=version_str, name=exp_name)
 
     filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
@@ -190,6 +192,7 @@ def run_predict(config, datasplit, quiet=False):
         config.Experiment.logdir.value,
         config.Experiment.name.value,
         f"version_{config.Experiment.version.value}",
+        f"seed_{config.Experiment.random_seed.value}",
         "predictions")
 
     ignore_keys = ["token_type_ids", "attention_mask",
@@ -217,7 +220,8 @@ def find_model_checkpoint(config):
     logdir = os.path.join(
         config.Experiment.logdir.value,
         config.Experiment.name.value,
-        f"version_{config.Experiment.version.value}")
+        f"version_{config.Experiment.version.value}",
+        f"seed_{config.Experiment.random_seed.value}")
     hparams_path = os.path.join(logdir, "hparams.yaml")
     if not os.path.isfile(hparams_path):
         raise OSError(f"No hparams.yaml found in {logdir}.")
