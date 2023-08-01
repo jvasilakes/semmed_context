@@ -121,10 +121,17 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         pooled_entities = self.entity_pooler(
             bert_outputs.last_hidden_state, entity_token_idxs)
 
+        extended_mask = get_extended_attention_mask(
+            bert_inputs["attention_mask"], bert_inputs["input_ids"].size())
         clf_outputs = {}
         for (task, clf_head) in self.classifier_heads.items():
+            task_hidden = self.task_encoders[task](
+                bert_outputs.last_hidden_state, extended_mask)
+            if isinstance(task_hidden, tuple):
+                # BertLayer outputs a tuple, but other task_encoders don't.
+                task_hidden = task_hidden[0]
             tmp = self.levitated_poolers[task](
-                bert_outputs.last_hidden_state, levitated_token_idxs,
+                task_hidden, levitated_token_idxs,
                 pooled_entities)
             pooled_levitated, levitated_attentions = tmp
             pooled_output = torch.cat([pooled_entities, pooled_levitated],
@@ -242,3 +249,44 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
                     lr=self.lr,
                     weight_decay=self.weight_decay)
         return opt
+
+
+def get_extended_attention_mask(attention_mask, input_shape):
+    """
+    Makes broadcastable attention so that future and masked tokens are ignored.
+
+    Arguments:
+        attention_mask (:obj:`torch.Tensor`):
+            Mask with ones indicating tokens to attend to,
+            zeros for tokens to ignore.
+        input_shape (:obj:`Tuple[int]`):
+            The shape of the input to the model.
+
+    Returns:
+        :obj:`torch.Tensor` The extended attention mask,
+        with a the same dtype as :obj:`attention_mask.dtype`.
+    """
+    # We can provide a self-attention mask of dimensions
+    #   [batch_size, from_seq_length, to_seq_length]
+    # ourselves in which case we just need to make it broadcastable
+    #   to all heads.
+    if attention_mask.dim() == 3:
+        extended_attention_mask = attention_mask[:, None, :, :]
+    elif attention_mask.dim() == 2:
+        # Provided a padding mask of dimensions [batch_size, seq_length]
+        # make the mask broadcastable to [batch_size, num_heads, seq_length, seq_length]  # noqa
+        extended_attention_mask = attention_mask[:, None, None, :]
+    else:
+        raise ValueError(
+            "Wrong shape for input_ids (shape {}) or attention_mask (shape {})".format(  # noqa
+                input_shape, attention_mask.shape
+            )
+        )
+
+    # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
+    # masked positions, this operation will create a tensor which is 0.0 for
+    # positions we want to attend and -10000.0 for masked positions.
+    # Since we are adding it to the raw scores before the softmax, this is
+    # effectively the same as removing these entirely.
+    extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+    return extended_attention_mask

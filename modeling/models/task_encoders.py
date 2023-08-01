@@ -6,7 +6,15 @@ from transformers.models.bert.modeling_bert import BertLayer, BertAttention
 from .util import register_task_encoder
 
 
-register_task_encoder("identity")(nn.Identity)
+@register_task_encoder("identity")
+class Identity(nn.Identity):
+    """
+    Identity but allows for variable keyword arguments.
+    Keyword arguments are ignored. Only the first
+    argument to forward is returned.
+    """
+    def forward(self, x, *args, **kwargs):
+        return x
 
 
 register_task_encoder("bert-layer")(BertLayer)
