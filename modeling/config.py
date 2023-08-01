@@ -177,6 +177,11 @@ def weight_decay(val):
     assert val >= 0.0
 
 
+@config.parameter(group="Training", default=1, types=int)
+def accumulate_grad_batches(val):
+    assert val >= 1
+
+
 @config.parameter(group="Training", default=0.0, types=float)
 def dropout_prob(val):
     assert val >= 0.0

@@ -105,6 +105,7 @@ def run_train(config, quiet=False):
     print(f"GPUs: {available_gpus}")
     trainer = pl.Trainer(
         max_epochs=config.Training.epochs.value,
+        accumulate_grad_batches=config.Training.accumulate_grad_batches.value,
         gpus=available_gpus,
         logger=logger,
         callbacks=[checkpoint_cb],
