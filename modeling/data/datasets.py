@@ -1,4 +1,5 @@
 import os
+import random
 from copy import deepcopy
 from glob import glob
 from collections import defaultdict
@@ -65,13 +66,15 @@ class SemRepFactDataset(object):
         return cls(datadir=config.Data.datadir.value,
                    encoder=encoder,
                    tasks_to_load=config.Data.tasks_to_load.value,
-                   num_examples=config.Data.num_examples.value)
+                   num_examples=config.Data.num_examples.value,
+                   random_seed=config.Experiment.random_seed.value)
 
     def __init__(self,
                  datadir,
                  encoder=None,
                  tasks_to_load="all",
-                 num_examples=-1):
+                 num_examples=-1,
+                 random_seed=0):
         super().__init__()
         assert os.path.isdir(datadir), f"{datadir} is not a directory."
         self.datadir = datadir
@@ -81,6 +84,7 @@ class SemRepFactDataset(object):
             self.encoder = encoder
         self.tasks_to_load = tasks_to_load
         self.num_examples = num_examples
+        self.rng = random.Random(random_seed)
 
         if isinstance(tasks_to_load, str):
             if tasks_to_load == "all":
@@ -124,7 +128,8 @@ class SemRepFactDataset(object):
         train_path = os.path.join(tardir, "train.tar.gz")
         val_path = os.path.join(tardir, "val.tar.gz")
         test_path = os.path.join(tardir, "test.tar.gz")
-        train = wds.WebDataset(train_path).shuffle(1000).decode()
+        train = wds.WebDataset(train_path).shuffle(
+            1000, rng=self.rng).decode()
         train = train.map(self.encoder).map(self.tasks_filter)
         train = train.map(self.transform_labels)
         val = wds.WebDataset(val_path).decode()

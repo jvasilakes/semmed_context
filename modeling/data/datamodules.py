@@ -1,3 +1,4 @@
+import random
 import webdataset as wds
 import pytorch_lightning as pl
 
@@ -16,11 +17,15 @@ class SemRepFactDataModule(pl.LightningDataModule):
         self.label_spec = self.dataset.label_spec
         self.batch_size = self.config.Training.batch_size.value
         self.tokenizer = self.dataset.encoder.tokenizer
+        self.rng = random.Random(self.config.Experiment.random_seed.value)
+        random.seed(self.config.Experiment.random_seed.value)
         self._ran_setup = True
 
     def train_dataloader(self):
+        if getattr(self.dataset.train, "__len__", None) is not None:
+            random.shuffle(self.dataset.train)
         return wds.WebLoader(self.dataset.train, batch_size=self.batch_size,
-                             num_workers=4).shuffle(1000)
+                             num_workers=4).shuffle(1000, rng=self.rng)
 
     def val_dataloader(self):
         return wds.WebLoader(self.dataset.val, batch_size=self.batch_size,
