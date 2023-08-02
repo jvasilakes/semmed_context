@@ -140,9 +140,10 @@ def levitated_pool_fn(val):
 
 
 @config.parameter(group="Model.TaskEncoder", default="identity", types=str)
-def encoder_type(val):
+def encoder_type(val):  # noqa F811 redefinition of unused 'encoder_type' from line 75
     """
-    identity: No task-specific encoder between final BERT layer and entity poolers.
+    identity: No task-specific encoder between final BERT layer and
+              entity poolers.
     bert-layer: Use another BertLayer for each task.
     bert-attention: Use a BertAttention mechanism for each task.
     """
@@ -150,7 +151,7 @@ def encoder_type(val):
 
 
 @config.parameter(group="Model.TaskEncoder", default={}, types=dict)
-def init_kwargs(val):
+def init_kwargs(val):  # noqa F811 redefinition of unused 'init_kwargs' from line 93
     """
     Optional keyword arguments to pass to the task encoder.
     """
