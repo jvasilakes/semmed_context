@@ -20,8 +20,8 @@ from .util import (register_model, ENTITY_POOLER_REGISTRY,
 transformers_logging.set_verbosity_error()
 
 
-@register_model("levitated_marker_attentions")
-class LevitatedMarkerModelWithAttentions(pl.LightningModule):
+@register_model("levitated_marker_hier")
+class LevitatedMarkerHierModel(pl.LightningModule):
 
     @classmethod
     def from_config(cls, config, label_spec):
@@ -52,6 +52,12 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
             weight_decay=0.0,
             dropout_prob=0.0):
         super().__init__()
+
+        if "Predicate" not in label_spec.keys():
+            raise KeyError("LevitatedMarkerHier requires 'Predicate' as a task.")  # noqa
+        if len(label_spec.keys()) < 2:
+            raise ValueError("LevitatedMarkerHier requires at least 2 tasks.")
+
         self.bert_model_name_or_path = bert_model_name_or_path
         self.label_spec = label_spec
         self.loss_fn = loss_fn
@@ -70,18 +76,19 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
             self.bert_model_name_or_path, config=self.bert_config)
 
         # Multiply by 2 because we have subject and object.
-        entity_pooler_insize = 2 * self.bert_config.hidden_size
-        entity_pooler_outsize = self.bert_config.hidden_size
+        bert_hidden_size = self.bert_config.hidden_size
+        entity_pooler_insize = 2 * bert_hidden_size
+        entity_pooler_outsize = bert_hidden_size
         if self.project_entities is False:
             # Don't project the entities down, so keep outsize equal to insize
             entity_pooler_outsize = entity_pooler_insize
         self.entity_pooler = ENTITY_POOLER_REGISTRY[self.entity_pool_fn](
             entity_pooler_insize, entity_pooler_outsize)
 
-        lev_pooler_insize = lev_pooler_outsize = self.bert_config.hidden_size
+        lev_pooler_insize = lev_pooler_outsize = bert_hidden_size
         # The alignment model computes attentions between the entity_pooler
         # output and the hidden representations of each token.
-        lev_alignment_insize = entity_pooler_outsize + self.bert_config.hidden_size  # noqa
+        lev_alignment_insize = entity_pooler_outsize + bert_hidden_size
         classifier_insize = entity_pooler_outsize + lev_pooler_outsize
         self.task_encoders = nn.ModuleDict()
         self.levitated_poolers = nn.ModuleDict()
@@ -89,11 +96,21 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
         for (task, num_labels) in label_spec.items():
             self.task_encoders[task] = TASK_ENCODER_REGISTRY[self.task_encoder_type](  # noqa
                 self.bert_config, **self.task_encoder_kwargs)
+            lev_pooler_insize_ = lev_pooler_insize
+            lev_alignment_insize_ = lev_alignment_insize
+            classifier_insize_ = classifier_insize
+            if task != "Predicate":
+                # Auxiliary tasks take in the pooled predicate representation
+                # (which is entities_pooled + levitated_pooled = 768 + 768)
+                # as well as their own levitated_pooled (768) so
+                # total is 768 * 3 = 2304.
+                lev_alignment_insize_ = lev_alignment_insize + bert_hidden_size
+                classifier_insize_ = classifier_insize + bert_hidden_size
             self.levitated_poolers[task] = ENTITY_POOLER_REGISTRY[self.levitated_pool_fn](  # noqa
-                lev_pooler_insize, lev_pooler_outsize, lev_alignment_insize)
+                lev_pooler_insize_, lev_pooler_outsize, lev_alignment_insize_)
             self.classifier_heads[task] = nn.Sequential(
                 nn.Dropout(self.dropout_prob),
-                nn.Linear(classifier_insize, num_labels)
+                nn.Linear(classifier_insize_, num_labels)
             )
 
         self.save_hyperparameters()
@@ -110,8 +127,43 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
 
         extended_mask = get_extended_attention_mask(
             bert_inputs["attention_mask"], bert_inputs["input_ids"].size())
+
         clf_outputs = {}
+
+        # First, get the outputs for the Predicate task in the usual fashion.
+        predicate_hidden = self.task_encoders["Predicate"](
+                bert_outputs.last_hidden_state, extended_mask)
+        if isinstance(predicate_hidden, tuple):
+            # BertLayer outputs a tuple, but other task_encoders don't.
+            predicate_hidden = predicate_hidden[0]
+        tmp = self.levitated_poolers["Predicate"](
+            predicate_hidden, levitated_token_idxs, pooled_entities)
+        predicate_levitated, pred_lev_attentions = tmp
+        predicate_pooled = torch.cat([pooled_entities, predicate_levitated],
+                                     dim=1)
+
+        pred_logits = self.classifier_heads["Predicate"](predicate_pooled)
+        if labels is not None:
+            predicate_loss = self.loss_fn(
+                pred_logits.view(-1, self.label_spec["Predicate"]),
+                labels["Predicate"].view(-1))
+        else:
+            predicate_loss = None
+        clf_outputs["Predicate"] = SequenceClassifierOutputWithTokenMask(
+            loss=predicate_loss,
+            logits=pred_logits,
+            hidden_states=bert_outputs.hidden_states,
+            attentions=bert_outputs.attentions,
+            mask=predicate_levitated[0])
+
+        # Then get the outputs for the other tasks, using the pooled output of
+        # the Predicate task instead of pooled_entities.
+        # detach() so we don't backprop gradients from other tasks through
+        # the Predicate layers.
+        predicate_pooled_detached = predicate_pooled.detach()
         for (task, clf_head) in self.classifier_heads.items():
+            if task == "Predicate":
+                continue
             task_hidden = self.task_encoders[task](
                 bert_outputs.last_hidden_state, extended_mask)
             if isinstance(task_hidden, tuple):
@@ -119,10 +171,10 @@ class LevitatedMarkerModelWithAttentions(pl.LightningModule):
                 task_hidden = task_hidden[0]
             tmp = self.levitated_poolers[task](
                 task_hidden, levitated_token_idxs,
-                pooled_entities)
+                predicate_pooled_detached)
             pooled_levitated, levitated_attentions = tmp
-            pooled_output = torch.cat([pooled_entities, pooled_levitated],
-                                      dim=1)
+            pooled_output = torch.cat(
+                [predicate_pooled_detached, pooled_levitated], dim=1)
             logits = clf_head(pooled_output)
             if labels is not None:
                 clf_loss = self.loss_fn(logits.view(-1, self.label_spec[task]),

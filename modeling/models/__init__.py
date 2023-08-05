@@ -15,3 +15,4 @@ from .default import BertForMultiTaskSequenceClassification  # noqa F401
 from .solid_markers import SolidMarkerClassificationModel  # noqa F401
 from .levitated_markers import LevitatedMarkerClassificationModel  # noqa F401
 from .levitated_markers_attentions import LevitatedMarkerModelWithAttentions  # noqa F401
+from .levitated_markers_hier import LevitatedMarkerHierModel  # noqa F401

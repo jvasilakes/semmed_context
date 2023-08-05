@@ -1,3 +1,10 @@
+from typing import Optional, Tuple
+
+import torch
+from dataclasses import dataclass
+from transformers.file_utils import ModelOutput
+
+
 MODEL_REGISTRY = {}
 
 
@@ -20,6 +27,7 @@ def register_task_encoder(name):
 
 ENTITY_POOLER_REGISTRY = {}
 
+
 def register_entity_pooler(name):
     def add_to_registry(cls):
         ENTITY_POOLER_REGISTRY[name] = cls
@@ -35,3 +43,14 @@ def register_loss(name):
         LOSS_REGISTRY[name] = cls
         return cls
     return add_to_registry
+
+
+@dataclass
+class SequenceClassifierOutputWithTokenMask(ModelOutput):
+
+    logits: torch.FloatTensor = None
+    loss: Optional[torch.FloatTensor] = None
+    mask_loss: Optional[torch.FloatTensor] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+    mask: Optional[torch.FloatTensor] = None
