@@ -18,9 +18,6 @@ from data import SemRepFactDataModule
 from models import MODEL_REGISTRY
 
 
-torch.use_deterministic_algorithms(True)
-
-
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -114,7 +111,6 @@ def run_train(config, quiet=False):
         callbacks=[checkpoint_cb],
         log_every_n_steps=1,
         check_val_every_n_epoch=1,
-        deterministic=True,
         enable_progress_bar=not quiet)
     trainer.fit(model, datamodule=datamodule)
 
