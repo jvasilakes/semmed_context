@@ -154,7 +154,7 @@ class LevitatedMarkerHierModel(pl.LightningModule):
             logits=pred_logits,
             hidden_states=bert_outputs.hidden_states,
             attentions=bert_outputs.attentions,
-            mask=predicate_levitated[0])
+            mask=pred_lev_attentions[0])
 
         # Then get the outputs for the other tasks, using the pooled output of
         # the Predicate task instead of pooled_entities.
