@@ -105,8 +105,8 @@ def model_name(val):
     assert val in MODEL_REGISTRY.keys()
 
 
-@config.parameter(group="Model", default="bert-base-uncased", types=str)
-def bert_model_name_or_path(val):  # noqa F811 redefinition of unused 'bert_model_name_or_path' from line 69
+@config.parameter(group="Model", default="bert-base-uncased", types=str)  # noqa
+def bert_model_name_or_path(val):
     pass
 
 
@@ -139,8 +139,8 @@ def levitated_pool_fn(val):
     assert val is None or val in ENTITY_POOLER_REGISTRY.keys()
 
 
-@config.parameter(group="Model.TaskEncoder", default="identity", types=str)
-def encoder_type(val):  # noqa F811 redefinition of unused 'encoder_type' from line 75
+@config.parameter(group="Model.TaskEncoder", default="identity", types=str)  # noqa
+def encoder_type(val):
     """
     identity: No task-specific encoder between final BERT layer and
               entity poolers.
@@ -150,8 +150,8 @@ def encoder_type(val):  # noqa F811 redefinition of unused 'encoder_type' from l
     assert val in ["identity", "bert-layer", "bert-attention"]
 
 
-@config.parameter(group="Model.TaskEncoder", default={}, types=dict)
-def init_kwargs(val):  # noqa F811 redefinition of unused 'init_kwargs' from line 93
+@config.parameter(group="Model.TaskEncoder", default={}, types=dict)  # noqa
+def init_kwargs(val):
     """
     Optional keyword arguments to pass to the task encoder.
     """
@@ -203,6 +203,8 @@ def validate_parameters():
         # Use in to check since we can have derivative models,
         # e.g., levitated_marker vs. levitated_marker_attentions
         assert config.Data.Encoder.encoder_type.value in config.Model.model_name.value  # noqa
+    if "attention" not in config.Model.model_name.value:
+        assert "attention" not in config.Model.levitated_pool_fn.value
 
 
 if __name__ == "__main__":
