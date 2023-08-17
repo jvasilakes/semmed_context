@@ -2,6 +2,8 @@ FactualityData/
 n2c2Data/
 configs/
 oldrun.py
+modeling_vae/logs
+modeling_vae/runs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
