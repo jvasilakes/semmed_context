@@ -59,7 +59,7 @@ class SemRepFactDataset(object):
 
     @classmethod
     def from_config(cls, config):
-        encoder_type = config.Data.Encoder.encoder_type.value
+        encoder_type = config.Data.encoder_type.value
         if encoder_type is None:
             encoder = None
         else:

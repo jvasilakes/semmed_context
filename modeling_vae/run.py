@@ -228,9 +228,11 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
 
     model.train()
     if verbose is True:
-        pbar = tqdm(total=len(dataloader))
-    step = epoch * len(dataloader)
-    total_steps = params.Training.epochs.value * len(dataloader)
+        try:
+            pbar = tqdm(total=len(dataloader))
+        except TypeError:  # WebLoader has no __len__
+            pbar = tqdm(dataloader)
+    step = 0
     for (i, batch) in enumerate(dataloader):
         in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
         target_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
@@ -252,10 +254,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         kl_weights_dict = {}
         lambdas = params.Training.lambdas.value
         for (latent_name, weight) in lambdas.items():
-            weight_val = weight
-            if weight_val == "cyclic":
-                weight_val = losses.get_cyclic_kl_weight(step, total_steps)
-            kl_weights_dict[latent_name] = weight_val
+            kl_weights_dict[latent_name] = weight
             loss_logger.update({"kl_weights": kl_weights_dict})
 
         # DO NOT CHANGE MI LOSS WEIGHT! IT WORKS NOW BUT WONT IF YOU CHANGE IT!
@@ -326,14 +325,6 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         if verbose is True:
             pbar.update(1)
             pbar.set_description(f"EPOCH: {epoch}")
-        # After 20 step warmup, get an estimate of time to epoch completion
-        if step == (epoch * len(dataloader)) + 20 and verbose is False:
-            time_so_far = time.time() - epoch_start
-            seconds_2_completion = time_so_far * (len(dataloader) / 20)
-            estimated_timedelta = str(datetime.timedelta(
-                seconds=seconds_2_completion))
-            logstr = f"Estimated epoch duration: {estimated_timedelta}"
-            logging.info(logstr)
 
         step += 1
 
@@ -367,7 +358,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
     return model, optimizer
 
 
-def evalstep(model, dataloader, params, epoch, tokenizer, name="dev",
+def evalstep(model, dataloader, params, epoch, tokenizer, name="val",
              verbose=True, summary_writer=None, logdir=None):
 
     if summary_writer is None:
@@ -382,12 +373,19 @@ def evalstep(model, dataloader, params, epoch, tokenizer, name="dev",
 
     model.eval()
     if verbose is True:
-        pbar = tqdm(total=len(dataloader))
+        try:
+            pbar = tqdm(total=len(dataloader))
+        except TypeError:  # WebLoader has no __len__
+            pbar = tqdm(dataloader)
     for (i, batch) in enumerate(dataloader):
-        in_Xbatch, target_Xbatch, Ybatch, lengths, batch_ids = batch
-        in_Xbatch = in_Xbatch.to(model.device)
-        target_Xbatch = target_Xbatch.to(model.device)
-        lengths = lengths.to(model.device)
+        in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
+        target_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
+        Ybatch = {}
+        for (task, val) in batch["json"]["labels"].items():
+            Ybatch[task] = val.to(model.device)
+        lengths = batch["json"]["encoded"]["lengths"].to(model.device)
+        batch_ids = batch["__key__"]
+
         output = model(in_Xbatch, lengths, teacher_forcing_prob=0.0)
 
         kl_weights_dict = {}
@@ -477,25 +475,24 @@ def run(args):
     # Read train data
 
     # Always load the train data since we need it to build the model
-    dm = data.ConceptNetDataModule(params)
+    datamodule_cls = data.DATAMODULE_REGISTRY[params.Data.dataset_name.value]
+    dm = datamodule_cls(params)
     dm.setup()
     train_dataloader = dm.train_dataloader()
     val_dataloader = dm.val_dataloader()
     test_dataloader = dm.test_dataloader()
 
-    if args.command == "train":
+    if args.command in ["train", "validate"]:
         train_writer_path = os.path.join(
-            "runs", params.Experiment.name.value, "train")
+            logdir, "summary", "train")
         train_writer = SummaryWriter(log_dir=train_writer_path)
-
-    if args.command == "validate":
-        dev_writer_path = os.path.join(
-            "runs", params.Experiment.name.value, "dev")
-        dev_writer = SummaryWriter(log_dir=dev_writer_path)
+        val_writer_path = os.path.join(
+            logdir, "summary", "val")
+        val_writer = SummaryWriter(log_dir=val_writer_path)
 
     if args.command == "test":
         test_writer_path = os.path.join(
-            "runs", params.Experiment.name.value, "test")
+            logdir, "summary", "test")
         test_writer = SummaryWriter(log_dir=test_writer_path)
 
     # Build the VAE
@@ -531,6 +528,9 @@ def run(args):
 
     # TRAIN
     eval_every = 1
+    train_data_to_log = [ex for (i, ex) in enumerate(dm.dataset.train) if i < 20]  # noqa
+    val_data_to_log = [ex for (i, ex) in enumerate(dm.dataset.val) if i < 20]
+    test_data_to_log = [ex for (i, ex) in enumerate(dm.dataset.test) if i < 20]
     if args.command == "train":
         logging.info("TRAINING")
         logging.info("Ctrl-C to interrupt and keep most recent model.")
@@ -546,15 +546,17 @@ def run(args):
                     dm.tokenizer, verbose=not args.quiet,
                     summary_writer=train_writer, logdir=logdir)
                 # Log train inputs and their reconstructions
-                #utils.log_reconstructions(vae, train_data, idx2word,
-                #                          "train", epoch, logdir, n=20)
+                utils.log_reconstructions(vae, train_data_to_log,
+                                          dm.tokenizer, "train", epoch, logdir)
                 if epoch % eval_every == 0:
                     evalstep(vae, val_dataloader, params, epoch, dm.tokenizer,
-                             verbose=not args.quiet, summary_writer=dev_writer,
+                             verbose=not args.quiet, summary_writer=val_writer,
                              logdir=logdir)
-                    # Log dev inputs and their reconstructions
-                    #utils.log_reconstructions(vae, dev_data, idx2word,
-                    #                          "dev", epoch, logdir, n=20)
+                    # Log val inputs and their reconstructions
+                    val_data_to_log = dm.dataset.val[:20]
+                    utils.log_reconstructions(
+                        vae, val_data_to_log, dm.tokenizer, "val",
+                        epoch, logdir)
                 # Save the model
                 logging.info(f"Saving model checkpoint to {ckpt_dir}")
                 ckpt_fname = f"model_{epoch}.pt"
@@ -574,17 +576,17 @@ def run(args):
     # VALIDATE
     if args.command == "validate":
         evalstep(vae, val_dataloader, params, start_epoch, dm.tokenizer,
-                 verbose=not args.quiet, summary_writer=dev_writer, logdir=logdir)  # noqa
-        #utils.log_reconstructions(vae, dev_data, idx2word,
-        #                          "dev", start_epoch, logdir, n=30)
+                 verbose=not args.quiet, summary_writer=val_writer, logdir=logdir)  # noqa
+        utils.log_reconstructions(vae, val_data_to_log, dm.tokenizer,
+                                  "val", epoch, logdir)
 
     # TEST
     if args.command == "test":
         evalstep(vae, test_dataloader, params, start_epoch,
                  dm.tokenizer, verbose=not args.quiet,
                  summary_writer=test_writer, logdir=logdir, name="test")
-        #utils.log_reconstructions(vae, test_data, idx2word,
-        #                          "test", start_epoch, logdir, n=30)
+        utils.log_reconstructions(vae, test_data_to_log, dm.tokenizer,
+                                  "test", epoch, logdir)
 
     now = datetime.datetime.now()
     now_str = now.strftime("%Y-%m-%d_%H:%M:%S")

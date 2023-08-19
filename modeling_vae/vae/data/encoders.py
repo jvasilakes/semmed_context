@@ -93,7 +93,6 @@ class LSTMEncoder(Encoder):
                 if all(subj_idxs + obj_idxs):  # None casts to False
                     break
                 prev_end = end
-            del encoded["offset_mapping"]  # no longer needed
             if not all(subj_idxs + obj_idxs):
                 warnings.warn("Can't find subject or object. Try increasing max_seq_length")  # noqa
                 return None
@@ -103,6 +102,7 @@ class LSTMEncoder(Encoder):
             # Just keep the text, we don't need the character offsets anymore.
             data["subject"] = data["subject"][0]
             data["object"] = data["object"][0]
+        del encoded["offset_mapping"]  # no longer needed
         data["encoded"] = {k: torch.as_tensor(v)
                            for (k, v) in encoded.items()}
         data["encoded"]["lengths"] = (data["encoded"]["input_ids"] != 0).sum()

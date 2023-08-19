@@ -17,6 +17,20 @@ def register_datamodule(name):
     return add_to_registry
 
 
+def min_pad_collate(batch):
+    max_length = max([len(ex["json"]["encoded"]["input_ids"])
+                      for ex in batch])
+    for ex in batch:
+        input_ids = ex["json"]["encoded"]["input_ids"]
+        pad_length = max_length - len(input_ids)
+        if pad_length == 0:
+            continue
+        id_pad = torch.zeros(pad_length, dtype=torch.long)
+        ex["json"]["encoded"]["input_ids"] = torch.cat([input_ids, id_pad])
+    collated = default_collate(batch)
+    return collated
+
+
 @register_datamodule("semrep-fact")
 class SemRepFactDataModule(pl.LightningDataModule):
 
@@ -37,16 +51,17 @@ class SemRepFactDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         if getattr(self.dataset.train, "__len__", None) is not None:
             random.shuffle(self.dataset.train)
-        return wds.WebLoader(self.dataset.train, batch_size=self.batch_size,
-                             num_workers=4).shuffle(1000, rng=self.rng)
+        return wds.WebLoader(
+            self.dataset.train, batch_size=self.batch_size,
+            num_workers=4, collate_fn=min_pad_collate).shuffle(1000, rng=self.rng)  # noqa
 
     def val_dataloader(self):
         return wds.WebLoader(self.dataset.val, batch_size=self.batch_size,
-                             num_workers=4)
+                             num_workers=4, collate_fn=min_pad_collate)
 
     def test_dataloader(self):
         return wds.WebLoader(self.dataset.test, batch_size=self.batch_size,
-                             num_workers=4)
+                             num_workers=4, collate_fn=min_pad_collate)
 
     def __str__(self):
         return self.__class__.__name__
@@ -71,36 +86,20 @@ class ConceptNetDataModule(pl.LightningDataModule):
         random.seed(self.config.Experiment.random_seed.value)
         self._ran_setup = True
 
-    def collate_fn(self, batch):
-        max_length = max([ex["json"]["encoded"]["lengths"] for ex in batch])
-        for ex in batch:
-            pad_length = max_length - ex["json"]["encoded"]["lengths"]
-            if pad_length == 0:
-                continue
-            input_ids = ex["json"]["encoded"]["input_ids"]
-            id_pad = torch.zeros(pad_length, dtype=torch.long)
-            ex["json"]["encoded"]["input_ids"] = torch.cat([input_ids, id_pad])
-            offsets = ex["json"]["encoded"]["offset_mapping"]
-            os_pad = torch.zeros((pad_length, 2), dtype=torch.long)
-            ex["json"]["encoded"]["offset_mapping"] = torch.cat(
-                [offsets, os_pad])
-        collated = default_collate(batch)
-        return collated
-
     def train_dataloader(self):
         return DataLoader(self.dataset.train, batch_size=self.batch_size,
                           shuffle=True, num_workers=4,
-                          collate_fn=self.collate_fn)
+                          collate_fn=min_pad_collate)
 
     def val_dataloader(self):
         return DataLoader(self.dataset.val, batch_size=self.batch_size,
                           shuffle=False, num_workers=4,
-                          collate_fn=self.collate_fn)
+                          collate_fn=min_pad_collate)
 
     def test_dataloader(self):
         return DataLoader(self.dataset.test, batch_size=self.batch_size,
                           shuffle=False, num_workers=4,
-                          collate_fn=self.collate_fn)
+                          collate_fn=min_pad_collate)
 
     def __str__(self):
         return self.__class__.__name__

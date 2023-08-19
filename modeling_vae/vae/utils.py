@@ -1,5 +1,6 @@
 import os
 import pdb
+import json
 import pickle
 import random
 import logging
@@ -8,6 +9,9 @@ from collections import defaultdict
 
 import torch
 import numpy as np
+
+
+from vae.data.datamodules import min_pad_collate
 
 
 def set_seed(seed):
@@ -233,30 +237,24 @@ def tensor2text(tensor, idx2word, eos_token_idx):
     return [idx2word[i.item()] for i in tensor[:eos+1]]
 
 
-def get_reconstructions(model, dataset, idx2word, idxs):
-    batch = [dataset[i] for i in idxs]
-    noisy_Xs, target_Xs, _, lengths, ids = pad_sequence_denoising(batch)
-    noisy_Xs = noisy_Xs.to(model.device)
-    target_Xs = target_Xs.to(model.device)
-    lengths = lengths.to(model.device)
-    output = model(noisy_Xs, lengths, teacher_forcing_prob=0.0)
+def get_reconstructions(model, examples, tokenizer):
+    batch = min_pad_collate(examples)
+    inX = batch["json"]["encoded"]["input_ids"].to(model.device)
+    lengths = batch["json"]["encoded"]["lengths"].to(model.device)
+    output = model(inX, lengths, teacher_forcing_prob=0.0)
 
-    X_text = [' '.join(tensor2text(X, idx2word, model.eos_token_idx))
-              for X in target_Xs.cpu().detach()]
-    recon_text = [' '.join(tensor2text(r, idx2word, model.eos_token_idx))
-                  for r in output["token_predictions"]]
-    joined = '\n'.join([f"'{x}' ==> '{r}'" for (x, r)
-                        in zip(X_text, recon_text)])
-    return joined
+    recon_text = tokenizer.batch_decode(output["token_predictions"],
+                                        skip_special_tokens=True)
+    target_text = tokenizer.batch_decode(inX, skip_special_tokens=True)
+    return [{"target": target_text[i], "reconstruction": recon_text[i]}
+            for i in range(len(recon_text))]
 
 
-def log_reconstructions(model, dataset, idx2word, name, epoch, logdir, n=10):
-    idxs = np.random.choice(len(dataset),
-                            size=n,
-                            replace=False)
+def log_reconstructions(model, examples, tokenizer, name, epoch, logdir):
     # Log inputs and their reconstructions before model training
     recon_file = os.path.join(logdir, f"reconstructions_{name}.log")
-    recon_str = get_reconstructions(model, dataset, idx2word, idxs)
+    recons = get_reconstructions(model, examples, tokenizer)
+    out_data = {"epoch": epoch, "reconstructions": recons}
     with open(recon_file, 'a') as outF:
-        outF.write(f"EPOCH {epoch}\n")
-        outF.write(recon_str + '\n')
+        json.dump(out_data, outF)
+        outF.write('\n')
