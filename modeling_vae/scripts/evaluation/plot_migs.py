@@ -13,8 +13,6 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("MIG_files", type=str, nargs='+',
                         help="MIG*.jsonl files to plot.")
-    parser.add_argument("outfile", type=str,
-                        help="Where to save the plot.")
     parser.add_argument("--model_names", type=str, nargs='+', required=True,
                         help="Name to use for each MIG file.")
     return parser.parse_args()
@@ -31,7 +29,6 @@ def plot_migs(args):
         all_mig_dfs.append(mig_df)
     plot = plot_mis_migs(all_mi_dfs, all_mig_dfs, args.model_names)
     plt.show()
-    # plt.savefig(args.outfile)
 
 
 def get_mi_dataframe(mig_data):
@@ -68,8 +65,10 @@ def get_mig_dataframe(mig_data):
 def plot_mis_migs(mi_dfs, mig_dfs, names):
     num_subplots = len(mi_dfs)
     fig, axs = plt.subplots(2, num_subplots)
+    if num_subplots == 1:
+        axs = axs[:, None]
 
-    colors = ["#ef8a62", "#67a9cf"]
+    colors = ["#ef8a62", "#67a9cf", "#66c2a5"]
 
     i = 0
     for (mig_df, model_name) in zip(mig_dfs, names):
@@ -80,7 +79,8 @@ def plot_mis_migs(mi_dfs, mig_dfs, names):
             patch.set_facecolor(color)
         axs[0, i].set_title(model_name, fontsize=16)
         axs[0, i].set_ylim(0.0, 0.8)
-        axs[0, i].set_xticklabels(["Neg", "Unc"])
+        xticklabels = [name.title() for name in mig_df.columns]
+        axs[0, i].set_xticklabels(xticklabels)
         if i == 0:
             axs[0, i].set_ylabel("MIG", fontsize=14)
         if i > 0:
@@ -102,7 +102,7 @@ def plot_mis_migs(mi_dfs, mig_dfs, names):
         yerr.columns = [idx[1] for idx in yerr.columns]
         mi_summ.plot.bar(ax=axs[1, i], color=colors, rot=0, legend=False,
                          yerr=yerr)
-        xlabs = [name[0].upper() for name in mi_summ.index]
+        xlabs = [name.title() for name in mi_summ.index]
         axs[1, i].axes.xaxis.set_ticklabels(xlabs)
         axs[1, i].set_xlabel('')
         if i == 0:

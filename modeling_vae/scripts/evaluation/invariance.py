@@ -1,6 +1,6 @@
 import os
 import re
-import json
+import sys
 import argparse
 from glob import glob
 from collections import defaultdict
@@ -11,15 +11,17 @@ import pandas as pd
 import torch.distributions as D
 from tqdm import trange
 from matplotlib import cm
-
 import seaborn as sns
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.getcwd())
+from config import config  # noqa
+from vae import data as DATA # noqa
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("metadata_dir", type=str)
-    parser.add_argument("data_dir", type=str)
+    parser.add_argument("config_file", type=str)
     parser.add_argument("data_split", type=str,
                         choices=["train", "dev", "test"])
     parser.add_argument("--num_resamples", type=int, default=10)
@@ -27,17 +29,21 @@ def parse_args():
 
 
 def main(args):
-    zs_dir = os.path.join(args.metadata_dir, 'z')
+    config.load_yaml(args.config_file)
+    metadata_dir = os.path.join(config.Experiment.checkpoint_dir.value,
+                                config.Experiment.name.value,
+                                "metadata")
+    zs_dir = os.path.join(metadata_dir, 'z')
     epoch = get_last_epoch(zs_dir)
 
     z_files = glob(os.path.join(zs_dir, f"{args.data_split}_*_{epoch}.log"))
-    mu_files = glob(os.path.join(args.metadata_dir, "mu",
+    mu_files = glob(os.path.join(metadata_dir, "mu",
                                  f"{args.data_split}_*_{epoch}.log"))
-    logvar_files = glob(os.path.join(args.metadata_dir, "logvar",
+    logvar_files = glob(os.path.join(metadata_dir, "logvar",
                                      f"{args.data_split}_*_{epoch}.log"))
     latent_names = get_latent_names(z_files)
 
-    ids_dir = os.path.join(args.metadata_dir, "ordered_ids")
+    ids_dir = os.path.join(metadata_dir, "ordered_ids")
     ids_file = os.path.join(ids_dir, f"{args.data_split}_{epoch}.log")
     ids = [uuid.strip() for uuid in open(ids_file)]
 
@@ -45,7 +51,8 @@ def main(args):
     # But this will not include the "content" latent.
     # labels_set = {lname for lname in latent_names if lname is a supervised latent}  # noqa
     id2labels, labels_set = get_labels(
-        args.data_dir, args.data_split, latent_names)
+        config, args.data_split, latent_names)
+    labels_set = [l for l in labels_set if l != "content"]
     print(f"Generative factors: {labels_set}")
     if len(labels_set) <= 1:
         msg = "This script requires at least two generative factors"
@@ -89,6 +96,8 @@ def main(args):
                             zs_log[static_label_val][vary_label] = {}
                             zs_log[static_label_val][vary_label][vary_label_val] = zs_vals  # noqa
 
+                        if len(zs_vals) == 0:
+                            zs_vals = np.array([-1.0])
                         row = [i, latent_name, static_label, static_label_val,
                                vary_label, vary_label_val, zs_vals.mean(),
                                zs_vals.std()]
@@ -189,15 +198,19 @@ def get_latent_names(filenames):
     return latent_names
 
 
-def get_labels(data_dir, data_split, latent_names):
-    data_file = os.path.join(data_dir, f"{data_split}.jsonl")
-    data = [json.loads(line) for line in open(data_file)]
+def get_labels(config, data_split, latent_names):
+    dataset_name = config.Data.dataset_name.value
+    datamodule_cls = DATA.DATAMODULE_REGISTRY[dataset_name]
+    dm = datamodule_cls(config)
+    dm.setup()
+    data = getattr(dm.dataset, data_split)
     id2labels = {}
     labels_set = set()
     for datum in data:
-        labs = {key: val for (key, val) in datum.items()
+        datum = dm.dataset.inverse_transform_labels(datum)
+        labs = {key: val for (key, val) in datum["json"]["labels"].items()
                 if key in latent_names}
-        id2labels[datum["id"]] = labs
+        id2labels[datum["__key__"]] = labs
         labels_set.update(set(labs.keys()))
     return id2labels, labels_set
 

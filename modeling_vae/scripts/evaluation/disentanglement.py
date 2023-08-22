@@ -1,6 +1,7 @@
 import os
 import re
 import csv
+import sys
 import json
 import argparse
 from glob import glob
@@ -19,6 +20,11 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import precision_recall_fscore_support
 
 
+sys.path.insert(0, os.getcwd())
+from config import config  # noqa
+from vae import data as DATA # noqa
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(
@@ -35,17 +41,11 @@ def parse_args():
 
     compute_parser = subparsers.add_parser("compute")
     compute_parser.set_defaults(test=False, compute=True, summarize=False)
-    compute_parser.add_argument("metadata_dir", type=str,
-                                help="""Directory containing z/
-                                        and ordered_ids/""")
-    compute_parser.add_argument("data_dir", type=str,
-                                help="""Directory containing
-                                        {train,dev,test.jsonl}.""")
-    compute_parser.add_argument("dataset", type=str,
+    compute_parser.add_argument("config_file", type=str,
+                                help="Config file for experiment to evaluate.")
+    compute_parser.add_argument("datasplit", type=str,
                                 choices=["train", "dev", "test"],
-                                help="Dataset to run on.")
-    compute_parser.add_argument("outdir", type=str,
-                                help="Where to save the results.")
+                                help="Data split to run on.")
     compute_parser.add_argument("--epoch", type=int, default=-1,
                                 help="""Which epoch to run on.
                                         Default last.""")
@@ -55,11 +55,11 @@ def parse_args():
 
     summ_parser = subparsers.add_parser("summarize")
     summ_parser.set_defaults(test=False, compute=False, summarize=True)
-    summ_parser.add_argument("dataset", type=str,
+    summ_parser.add_argument("config_file", type=str,
+                             help="Config file for experiment to evaluate.")
+    summ_parser.add_argument("datasplit", type=str,
                              choices=["train", "dev", "test"],
                              help="Dataset to run on.")
-    summ_parser.add_argument("outdir", type=str,
-                             help="Directory containing results to summarize.")
 
     args = parser.parse_args()
     if [args.test, args.compute, args.summarize] == [False, False, False]:
@@ -76,39 +76,47 @@ def compute(args, model=None):
         Estimate logistic regression model from zs to labels.
         Evaluate above model on data_dir/{train,dev,test}.jsonl
     """
-    os.makedirs(args.outdir, exist_ok=True)
+    config.load_yaml(args.config_file)
+    metadata_dir = os.path.join(config.Experiment.checkpoint_dir.value,
+                                config.Experiment.name.value,
+                                "metadata")
+    outdir = os.path.join(config.Experiment.checkpoint_dir.value,
+                          config.Experiment.name.value,
+                          "evaluation/disentanglement")
 
-    zs_dir = os.path.join(args.metadata_dir, 'z')
+    os.makedirs(outdir, exist_ok=True)
+
+    zs_dir = os.path.join(metadata_dir, 'z')
     if args.epoch == -1:
         epoch = get_last_epoch(zs_dir)
     else:
         epoch = args.epoch
 
-    z_files = glob(os.path.join(zs_dir, f"{args.dataset}_*_{epoch}.log"))
-    mu_files = glob(os.path.join(args.metadata_dir, "mu",
-                                 f"{args.dataset}_*_{epoch}.log"))
-    logvar_files = glob(os.path.join(args.metadata_dir, "logvar",
-                                     f"{args.dataset}_*_{epoch}.log"))
+    z_files = glob(os.path.join(zs_dir, f"{args.datasplit}_*_{epoch}.log"))
+    mu_files = glob(os.path.join(metadata_dir, "mu",
+                                 f"{args.datasplit}_*_{epoch}.log"))
+    logvar_files = glob(os.path.join(metadata_dir, "logvar",
+                                     f"{args.datasplit}_*_{epoch}.log"))
     latent_names = get_latent_names(z_files)
 
-    ids_dir = os.path.join(args.metadata_dir, "ordered_ids")
-    ids_file = os.path.join(ids_dir, f"{args.dataset}_{epoch}.log")
+    ids_dir = os.path.join(metadata_dir, "ordered_ids")
+    ids_file = os.path.join(ids_dir, f"{args.datasplit}_{epoch}.log")
     ids = [uuid.strip() for uuid in open(ids_file)]
 
     # id2labels = {uuid: {latent_name: value for latent_name in latent_names}}
     # But this will not include the "content" latent.
     # labels_set = {lname for lname in latent_names if lname is a supervised latent}  # noqa
     id2labels, labels_set = get_labels(
-        args.data_dir, args.dataset, latent_names)
+        config, args.datasplit, latent_names)
     Vs = defaultdict(list)
     for uuid in ids:
         labels = id2labels[uuid]
         for (lab_name, val) in labels.items():
             Vs[lab_name].append(val)
 
-    migs_outfile = os.path.join(args.outdir, f"MIGS_{args.dataset}.jsonl")
-    preds_outfile = os.path.join(args.outdir,
-                                 f"predictions_{args.dataset}.csv")
+    migs_outfile = os.path.join(outdir, f"MIGS_{args.datasplit}.jsonl")
+    preds_outfile = os.path.join(outdir,
+                                 f"predictions_{args.datasplit}.csv")
     zipped = list(zip(latent_names, z_files, mu_files, logvar_files))
     Hvs = {}
     for i in trange(args.num_resamples):
@@ -163,15 +171,19 @@ def get_latent_names(filenames):
     return latent_names
 
 
-def get_labels(data_dir, dataset, latent_names):
-    data_file = os.path.join(data_dir, f"{dataset}.jsonl")
-    data = [json.loads(line) for line in open(data_file)]
+def get_labels(config, data_split, latent_names):
+    dataset_name = config.Data.dataset_name.value
+    datamodule_cls = DATA.DATAMODULE_REGISTRY[dataset_name]
+    dm = datamodule_cls(config)
+    dm.setup()
+    data = getattr(dm.dataset, data_split)
     id2labels = {}
     labels_set = set()
     for datum in data:
-        labs = {key: val for (key, val) in datum.items()
+        datum = dm.dataset.inverse_transform_labels(datum)
+        labs = {key: val for (key, val) in datum["json"]["labels"].items()
                 if key in latent_names}
-        id2labels[datum["id"]] = labs
+        id2labels[datum["__key__"]] = labs
         labels_set.update(set(labs.keys()))
     return id2labels, labels_set
 
@@ -406,24 +418,29 @@ def test_bijective_oracle(N, K, n_features=1, predictive=False):
 # ===========================
 
 def summarize_results(args):
-    print(f"Summarizing results from {args.outdir}/*_{args.dataset}")
+    config.load_yaml(args.config_file)
+    outdir = os.path.join(config.Experiment.checkpoint_dir.value,
+                          config.Experiment.name.value,
+                          "evaluation/disentanglement")
+
+    print(f"Summarizing results from {outdir}/*_{args.datasplit}")
     print()
 
-    plot_dir = os.path.join(args.outdir, "plots")
+    plot_dir = os.path.join(outdir, "plots")
     os.makedirs(plot_dir, exist_ok=True)
 
-    migs_outfile = os.path.join(args.outdir, f"MIGS_{args.dataset}.jsonl")
+    migs_outfile = os.path.join(outdir, f"MIGS_{args.datasplit}.jsonl")
     preds_outfile = os.path.join(
-        args.outdir, f"predictions_{args.dataset}.csv")
+        outdir, f"predictions_{args.datasplit}.csv")
     migs_data = [json.loads(line) for line in open(migs_outfile)]
     plot = summarize_migs(migs_data)
-    plot_outfile = os.path.join(plot_dir, f"disentanglement_{args.dataset}")
+    plot_outfile = os.path.join(plot_dir, f"disentanglement_{args.datasplit}")
     plot.savefig(f"{plot_outfile}.png", dpi=300)
     plot.savefig(f"{plot_outfile}.pdf", dpi=300)
 
     preds_data = pd.read_csv(preds_outfile)
     plot = summarize_preds(preds_data)
-    plot_outfile = os.path.join(plot_dir, f"predictions_{args.dataset}")
+    plot_outfile = os.path.join(plot_dir, f"predictions_{args.datasplit}")
     plot.savefig(f"{plot_outfile}.png", dpi=300)
     plot.savefig(f"{plot_outfile}.pdf", dpi=300)
 
@@ -478,7 +495,9 @@ def summarize_preds(preds_df):
     print("=== Predictive Performance ===")
     print(summ.to_string())
 
-    fig, axs = plt.subplots(1, 3, figsize=[10, 4])
+    num_latents = len(preds_df.latent_name.unique())
+    fig, axs = plt.subplots(1, num_latents,
+                            figsize=[3*(num_latents)+1, 4])
     i = 0
     for latent_name in sorted(preds_df.latent_name.unique()):
         df = preds_df.loc[preds_df.latent_name == latent_name, :]
@@ -486,7 +505,8 @@ def summarize_preds(preds_df):
             "sample_num", axis="columns")
         errs = df.groupby("label_name").std().drop(
             "sample_num", axis="columns")
-        means.plot.bar(ax=axs[i], yerr=errs, ylim=(0.2, 1.0), rot=0)
+        means.plot.bar(ax=axs[i], yerr=errs, ylim=(0.2, 1.0), rot=0,
+                       legend=i==0)
         axs[i].set_title(f"Latent: {latent_name}")
         i += 1
     plt.tight_layout()
