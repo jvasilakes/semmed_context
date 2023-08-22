@@ -548,9 +548,15 @@ def build_vae(params, vocab_size, emb_matrix, label_dims, device,
 
     discriminators = []
     for (name, outdim) in label_dims.items():
-        if name not in params.Model.latent_dims.value:
-            continue
-        latent_dim = params.Model.latent_dims.value[name]
+        # Use specified latent dims
+        try:
+            latent_dim = params.Model.latent_dims.value[name]
+        # Default to label dim.
+        except KeyError:
+            latent_dim = label_dims[name]
+            # Binary uses a single dimension.
+            if latent_dim == 2:
+                latent_dim = 1
         dsc = Discriminator(name, latent_dim, outdim)
         dsc.set_device(device)
         discriminators.append(dsc)
