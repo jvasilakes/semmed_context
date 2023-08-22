@@ -31,7 +31,7 @@ def dataset_name(val):
     assert val != ''
 
 
-@config.parameter(group="Data", default="all", types=(str,dict))
+@config.parameter(group="Data", default="all", types=(str,list))
 def tasks_to_load(val):
     pass
 
@@ -85,6 +85,7 @@ def decoder_dropout(val):
 def latent_dims(val):
     """
     The dimensionality of each latent space, including the total.
+    Will default to the number of labels if not specified.
     """
     for (name, dim) in val.items():
         assert isinstance(name, str)
