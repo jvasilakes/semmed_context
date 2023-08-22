@@ -1,6 +1,6 @@
 import os
 import csv
-import json
+import sys
 import logging
 import argparse
 import datetime
@@ -16,7 +16,9 @@ from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support
 
 # Local imports
-from vae import utils, data_utils, model, losses
+sys.path.insert(0, os.getcwd())
+from vae import utils, data, model, losses  # noqa
+from config import config as params  # noqa
 
 
 if torch.cuda.is_available():
@@ -32,13 +34,11 @@ def parse_args():
 
     compute_parser = subparsers.add_parser("compute")
     compute_parser.set_defaults(compute=True, summarize=False)
-    compute_parser.add_argument("params_json", type=str,
-                                help="""Path to JSON file containing
+    compute_parser.add_argument("config_file", type=str,
+                                help="""Path to YAML file containing
                                         experiment parameters.""")
-    compute_parser.add_argument("outdir", type=str,
-                                help="""Where to save the results.""")
-    compute_parser.add_argument("dataset", type=str,
-                                choices=["train", "dev", "test"],
+    compute_parser.add_argument("datasplit", type=str,
+                                choices=["train", "val", "test"],
                                 help="Dataset to summarize.")
     compute_parser.add_argument("--num_resamples", type=int, default=30,
                                 required=False,
@@ -49,9 +49,10 @@ def parse_args():
 
     summ_parser = subparsers.add_parser("summarize")
     summ_parser.set_defaults(compute=False, summarize=True)
-    summ_parser.add_argument("outdir", type=str,
-                             help="Directory containing results of compute.")
-    summ_parser.add_argument("dataset", type=str,
+    summ_parser.add_argument("config_file", type=str,
+                             help="""Path to YAML file containing
+                                     experiment parameters.""")
+    summ_parser.add_argument("datasplit", type=str,
                              choices=["train", "dev", "test"],
                              help="Dataset to summarize.")
 
@@ -59,95 +60,48 @@ def parse_args():
 
 
 def compute(args):
+    params.load_yaml(args.config_file)
+    utils.set_seed(params.Experiment.random_seed.value)
+
     logging.basicConfig(level=logging.INFO)
     now = datetime.datetime.now()
     now_str = now.strftime("%Y-%m-%d_%H:%M:%S")
     logging.info(f"START: {now_str}")
 
-    SOS = "<SOS>"
-    EOS = "<EOS>"
-
-    # Set up the various input and output files.
-    params = json.load(open(args.params_json, 'r'))
-    utils.validate_params(params)
-    utils.set_seed(params["random_seed"])
-
-    logdir = os.path.join("logs", params["name"])
-
-    ckpt_dir = os.path.join(params["checkpoint_dir"], params["name"])
+    ckpt_dir = os.path.join(params.Experiment.checkpoint_dir.value,
+                            params.Experiment.name.value)
     if not os.path.isdir(ckpt_dir):
-        raise OSError(f"No model found at {params['checkpoint_dir']}")
+        raise OSError(f"No model found at {ckpt_dir}")
 
     # Load the train data so we can fully specify the model
-    logging.info("Loading train dataset")
-    train_file = os.path.join(params["data_dir"], "train.jsonl")
-    N = params["num_train_examples"]
-    if args.dataset in ["dev", "test"]:
-        N = -1
-    # Only load the generative factors modeled
-    label_keys = [key for key in params["latent_dims"].keys()
-                  if key != "total"]
-    logging.info(f"Measuring model consistency on the following factors: \n {label_keys}")  # noqa
-    tmp = data_utils.get_sentences_labels(
-        train_file, N=N, label_keys=label_keys)
-    train_sents, train_labs, train_ids, train_lab_counts = tmp
-    train_sents = data_utils.preprocess_sentences(train_sents, SOS, EOS)
-    train_labs, label_encoders = data_utils.preprocess_labels(train_labs)
-
-    vocab_file = os.path.join(logdir, "vocab.txt")
-    vocab = [word.strip() for word in open(vocab_file)]
-    word2idx = {word: idx for (idx, word) in enumerate(vocab)}
-    train_data = data_utils.DenoisingTextDataset(
-        train_sents, train_sents, train_labs, train_ids,
-        word2idx, label_encoders)
-    dataloader = torch.utils.data.DataLoader(
-        train_data, shuffle=False, batch_size=params["batch_size"],
-        collate_fn=utils.pad_sequence_denoising)
-
-    # Optionally load dev/test dataset
-    if args.dataset in ["dev", "test"]:
-        eval_file = os.path.join(params["data_dir"], f"{args.dataset}.jsonl")
-        logging.info(f"Evaluating on {eval_file}")
-        tmp = data_utils.get_sentences_labels(
-            eval_file, N=-1, label_keys=label_keys)
-        eval_sents, eval_labs, eval_ids, eval_lab_counts = tmp
-        eval_sents = data_utils.preprocess_sentences(eval_sents, SOS, EOS)
-        eval_labs, _ = data_utils.preprocess_labels(
-            eval_labs, label_encoders=label_encoders)
-        eval_data = data_utils.DenoisingTextDataset(
-            eval_sents, eval_sents, eval_labs, eval_ids,
-            word2idx, label_encoders)
-        dataloader = torch.utils.data.DataLoader(
-            eval_data, shuffle=False, batch_size=params["batch_size"],
-            collate_fn=utils.pad_sequence_denoising)
-
-    # Get word embeddings if specified
-    emb_matrix = None
-    if params["glove_path"] != "":
-        logging.info(f"Loading embeddings from {params['glove_path']}")
-        glove, _ = utils.load_glove(params["glove_path"])
-        emb_matrix, word2idx = utils.get_embedding_matrix(vocab, glove)
-        logging.info(f"Loaded embeddings with size {emb_matrix.shape}")
-    idx2word = {idx: word for (word, idx) in word2idx.items()}
+    datamodule_cls = data.DATAMODULE_REGISTRY[params.Data.dataset_name.value]
+    dm = datamodule_cls(params)
+    dm.setup()
+    if args.datasplit == "train":
+        dataloader = dm.train_dataloader()
+    elif args.datasplit == "val":
+        dataloader = dm.val_dataloader()
+    elif args.datasplit == "test":
+        dataloader = dm.test_dataloader()
 
     # Build the VAE
-    label_dims_dict = train_data.y_dims
-    sos_idx = word2idx[SOS]
-    eos_idx = word2idx[EOS]
-    vae = model.build_vae(params, len(vocab), emb_matrix, label_dims_dict,
+    label_dims_dict = dm.label_spec
+    sos_idx = dm.tokenizer.cls_token_id
+    eos_idx = dm.tokenizer.sep_token_id
+    vae = model.build_vae(params, dm.tokenizer.vocab_size,
+                          None, label_dims_dict,
                           DEVICE, sos_idx, eos_idx)
-    optimizer = torch.optim.Adam(
-            vae.trainable_parameters(), lr=params["learn_rate"])
+    optimizer = torch.optim.Adam(vae.trainable_parameters(),
+                                 lr=params.Training.learn_rate.value)
 
     # Load the latest checkpoint, if there is one.
-    ckpt_dir = os.path.join(params["checkpoint_dir"], params["name"])
     if not os.path.isdir(ckpt_dir):
         raise OSError(f"No checkpoint found at '{ckpt_dir}'!")
     vae, optimizer, start_epoch, ckpt_fname = utils.load_latest_checkpoint(
             vae, optimizer, ckpt_dir)
     logging.info(f"Loaded checkpoint from '{ckpt_fname}'")
 
-    logging.info(f"Successfully loaded model {params['name']}")
+    logging.info("Successfully loaded model")
     logging.info(vae)
     vae.train()  # So we sample different latents each time.
 
@@ -159,14 +113,19 @@ def compute(args):
     latent_predictions_hat = defaultdict(list_fn)
     bleus = list_fn()
     if args.verbose is True:
-        pbar = tqdm(total=len(dataloader))
+        try:
+            pbar = tqdm(total=len(dataloader))
+        except TypeError:  # WebLoader has no __len__
+            pbar = tqdm(dataloader)
     for (i, batch) in enumerate(dataloader):
-        in_Xbatch, target_Xbatch, Ybatch, lengths, batch_ids = batch
-        for (label_name, ys) in Ybatch.items():
-            true_labels[label_name].extend(ys.tolist())
-        in_Xbatch = in_Xbatch.to(vae.device)
-        target_Xbatch = target_Xbatch.to(vae.device)
-        lengths = lengths.to(vae.device)
+        in_Xbatch = batch["json"]["encoded"]["input_ids"].to(vae.device)
+        target_Xbatch = batch["json"]["encoded"]["input_ids"].to(vae.device)
+        Ybatch = {}
+        for (task, val) in batch["json"]["labels"].items():
+            Ybatch[task] = val.to(vae.device)
+            true_labels[task].extend(val.tolist())
+        lengths = batch["json"]["encoded"]["lengths"].to(vae.device)
+
         for resample in range(args.num_resamples):
             # output = {"decoder_logits": [batch_size, target_length, vocab_size]  # noqa
             #           "latent_params": [Params(z, mu, logvar)] * batch_size
@@ -195,7 +154,7 @@ def compute(args):
 
             # Measure self-BLEU
             bleu = losses.compute_bleu(
-                target_Xbatch, Xbatch_hat, idx2word, vae.eos_token_idx)
+                target_Xbatch, Xbatch_hat, dm.tokenizer)
             bleus[resample].append(bleu)
 
             # ... and get the discriminators' predictions for the new input.
@@ -207,7 +166,7 @@ def compute(args):
         if args.verbose is True:
             pbar.update(1)
         else:
-            logging.info(f"{i}/{len(dataloader)}.")
+            logging.info(f"{i}")
 
     results = []
     for label_name in latent_predictions.keys():
@@ -230,9 +189,12 @@ def compute(args):
             row = [resample, label_name, "y_hat", "y_hat_prime", p, r, f]
             results.append(row)
 
-    os.makedirs(args.outdir, exist_ok=True)
+    outdir = os.path.join(params.Experiment.checkpoint_dir.value,
+                          params.Experiment.name.value,
+                          "evaluation/consistency")
+    os.makedirs(outdir, exist_ok=True)
     outfile = os.path.join(
-        args.outdir, f"decoder_predictions_{args.dataset}.csv")
+        outdir, f"decoder_predictions_{args.datasplit}.csv")
     with open(outfile, 'w') as outF:
         writer = csv.writer(outF, delimiter=',')
         writer.writerow(["batch", "sample_num", "label", "true", "pred",
@@ -240,7 +202,7 @@ def compute(args):
         for (batch, row) in enumerate(results):
             writer.writerow([batch] + row)
 
-    bleu_outfile = os.path.join(args.outdir, f"self_bleus_{args.dataset}.csv")
+    bleu_outfile = os.path.join(outdir, f"self_bleus_{args.datasplit}.csv")
     with open(bleu_outfile, 'w') as outF:
         writer = csv.writer(outF, delimiter=',')
         writer.writerow(["batch", "sample_num", "BLEU"])
@@ -250,8 +212,12 @@ def compute(args):
 
 
 def summarize(args):
+    params.load_yaml(args.config_file)
+    outdir = os.path.join(params.Experiment.checkpoint_dir.value,
+                          params.Experiment.name.value,
+                          "evaluation/consistency")
     infile = os.path.join(
-        args.outdir, f"decoder_predictions_{args.dataset}.csv")
+        outdir, f"decoder_predictions_{args.datasplit}.csv")
     df = pd.read_csv(infile)
     summ_df = df.groupby(["label", "true", "pred"]).agg(
         ["mean", "std"]).drop(["sample_num", "batch"], axis="columns")
@@ -275,12 +241,12 @@ def summarize(args):
                 bar.set_edgecolor('k')
 
     plt.tight_layout()
-    os.makedirs(os.path.join(args.outdir, "plots"), exist_ok=True)
+    os.makedirs(os.path.join(outdir, "plots"), exist_ok=True)
     plot_outfile = os.path.join(
-        args.outdir, "plots", f"decoder_predictions_{args.dataset}.pdf")
+        outdir, "plots", f"decoder_predictions_{args.datasplit}.pdf")
     fig.savefig(plot_outfile, dpi=300)
     plot_outfile = os.path.join(
-        args.outdir, "plots", f"decoder_predictions_{args.dataset}.png")
+        outdir, "plots", f"decoder_predictions_{args.datasplit}.png")
     fig.savefig(plot_outfile, dpi=300)
 
 
