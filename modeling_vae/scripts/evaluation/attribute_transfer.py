@@ -1,15 +1,19 @@
 import os
+import sys
 import json
 import logging
 import argparse
 from collections import Counter, defaultdict
 
 import torch
-import numpy as np
-import pandas as pd
+import torch.distributions as D
 from tqdm import tqdm
+import numpy as np
+from sklearn.metrics import accuracy_score
 
-from vae import utils, data_utils, model
+sys.path.insert(0, os.getcwd())
+from vae import utils, data, model, losses  # noqa
+from config import config as params  # noqa
 
 
 if torch.cuda.is_available():
@@ -26,13 +30,12 @@ def parse_args():
 
     compute_parser = subparsers.add_parser("compute")
     compute_parser.set_defaults(cmd="compute")
-    compute_parser.add_argument("params_file", type=str,
-                                help="Parameter file specifying model.")
-    compute_parser.add_argument("outfile", type=str,
-                                help="Where to save results.")
-    compute_parser.add_argument("dataset", type=str,
+    compute_parser.add_argument(
+        "config_file", type=str,
+        help="YAML config file for experiment to evaluate.")
+    compute_parser.add_argument("datasplit", type=str,
                                 choices=["train", "dev", "test"],
-                                help="Which dataset to run on.")
+                                help="Which data split to run on.")
     compute_parser.add_argument("--verbose", action="store_true",
                                 default=False)
 
@@ -42,6 +45,154 @@ def parse_args():
                              help="""outfile from compute command.""")
 
     return parser.parse_args()
+
+
+def compute(args):
+    logging.basicConfig(level=logging.INFO)
+    params.load_yaml(args.config_file)
+    utils.set_seed(params.Experiment.random_seed.value)
+
+    # Set logging directory
+    # Set model checkpoint directory
+    ckpt_dir = os.path.join(params.Experiment.checkpoint_dir.value,
+                            params.Experiment.name.value)
+    if not os.path.isdir(ckpt_dir):
+        raise OSError(f"No checkpoint found at '{ckpt_dir}'!")
+
+    # Read train data
+    # Load the train data so we can fully specify the model
+    datamodule_cls = data.DATAMODULE_REGISTRY[params.Data.dataset_name.value]
+    dm = datamodule_cls(params)
+    dm.setup()
+    if args.datasplit == "train":
+        dataloader = dm.train_dataloader()
+    elif args.datasplit == "val":
+        dataloader = dm.val_dataloader()
+    elif args.datasplit == "test":
+        dataloader = dm.test_dataloader()
+
+    label_dims_dict = dm.label_spec
+    sos_idx = dm.tokenizer.cls_token_id
+    eos_idx = dm.tokenizer.sep_token_id
+    vae = model.build_vae(params, dm.tokenizer.vocab_size,
+                          None, label_dims_dict,
+                          DEVICE, sos_idx, eos_idx)
+    optimizer = torch.optim.Adam(vae.trainable_parameters(),
+                                 lr=params.Training.learn_rate.value)
+
+    vae, _, start_epoch, ckpt_fname = utils.load_latest_checkpoint(
+        vae, optimizer, ckpt_dir, map_location=DEVICE)
+    print(f"Loaded checkpoint from '{ckpt_fname}'")
+    print(vae)
+
+    labs_df = None
+    results = run_transfer(vae, dataloader, params, labs_df, dm.tokenizer,
+                           args.verbose)
+
+    outfile = os.path.join(
+        params.Experiment.checkpoint_dir.value,
+        params.Experiment.name.value,
+        f"evaluation/attribute_transfer_{args.datasplit}.json")
+    with open(outfile, 'w') as outF:
+        for row in results:
+            json.dump(row, outF)
+            outF.write('\n')
+
+
+def run_transfer(model, dataloader, params, id2labs_df, tokenizer,
+                 verbose=False):
+    model.eval()
+    results = []
+    if verbose is True:
+        try:
+            pbar = tqdm(total=len(dataloader))
+        except TypeError:  # WebLoader has no __len__
+            pbar = tqdm(dataloader)
+
+    # First, get the output for each example in the dataset,
+    # recording the latent values for each task-label.
+    logged_outputs = []
+    latents_by_task = defaultdict(lambda: defaultdict(list))
+    for (i, batch) in enumerate(dataloader):
+        in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
+        Ybatch = {}
+        for (task, vals) in batch["json"]["labels"].items():
+            Ybatch[task] = vals.to(model.device)
+        lengths = batch["json"]["encoded"]["lengths"].to(model.device)
+
+        # trg_output = {"decoder_logits": [batch_size, target_length, vocab_size]  # noqa
+        #           "latent_params": {latent_name: [Params(z, mu, logvar)] * batch_size}  # noqa
+        #           "dsc_logits": {latent_name: [batch_size, n_classes]}
+        #           "adv_logits": {latent_name-label_name: [batch_size, n_classes]}  # noqa
+        #           "token_predictions": [batch_size, target_length]
+        trg_output = model(in_Xbatch, lengths, teacher_forcing_prob=0.0)
+        trg_output["latent_params"] = {
+            task: params._asdict() for (task, params)
+            in trg_output["latent_params"].items()}
+        examples = uncollate(trg_output)
+        for (j, ex) in enumerate(examples):
+            ex["input_ids"] = in_Xbatch[j]
+            ex["labels"] = {task: vals[j] for (task, vals) in Ybatch.items()}
+            ex["length"] = lengths[j]
+            logged_outputs.append(ex)
+
+        for (task, vals) in Ybatch.items():
+            for (j, val) in enumerate(vals):
+                params = (trg_output["latent_params"][task]["mu"][j].detach(),
+                          trg_output["latent_params"][task]["logvar"][j].detach())  # noqa
+                latents_by_task[task][val.detach().cpu().item()].append(params)
+
+    # Get the average parameter value for each task-value combo.
+    for task in latents_by_task.keys():
+        for (val, latents) in latents_by_task[task].items():
+            mean_mu = torch.stack([lat[0] for lat in latents], dim=0).mean(0)
+            mean_logvar = torch.stack(
+                [lat[1] for lat in latents], dim=0).mean(0)
+            latents_by_task[task][val] = (mean_mu, mean_logvar)
+
+    # Then, go back over the examples, flipping the latent values and decoding.
+    for example in logged_outputs:
+        for task in model.discriminators.keys():
+            orig_lab = example["labels"][task].detach().cpu().item()
+            other_labs = set(latents_by_task[task]).difference(set([orig_lab]))
+            for inverse_lab in other_labs:
+                inverse_mu, inverse_logvar = latents_by_task[task][inverse_lab]
+                inverse_var = inverse_logvar.exp()
+                inverse_z = D.Normal(inverse_mu, inverse_var).sample().to(model.device)  # noqa
+                trg_params = {latent_name: param["z"].clone()
+                              for (latent_name, param)
+                              in example["latent_params"].items()}
+                trg_params[task] = inverse_z
+                zs = [trg_params[task] for task in sorted(trg_params.keys())]
+                z = torch.cat(zs).unsqueeze(0)
+                max_length = example["length"] + 5
+                transferred_output = model.sample(z, max_length=max_length)
+
+                inverse_logits = model.discriminators[task](inverse_z.unsqueeze(0))
+                inverse_pred = model.discriminators[task].predict(inverse_logits)
+
+                source_text = tokenizer.decode(example["input_ids"],
+                                               skip_special_tokens=True)
+                transferred_text = tokenizer.decode(
+                    transferred_output["token_predictions"].squeeze(),
+                    skip_special_tokens=True)
+
+                row = {"latent": task,
+                       "source_text": source_text,
+                       "transferred_text": transferred_text,
+                       "source_label": orig_lab,
+                       "inverse_label": inverse_lab,
+                       "inverse_label_predicted": inverse_pred.detach().cpu().item()
+                       }
+                results.append(row)
+        if verbose is True:
+            pbar.update(1)
+        else:
+            print(f"{i}")
+    if verbose is True:
+        pbar.close()
+
+    return results
 
 
 def get_source_examples(labs_batch, dataset, latent_name, id2labs_df):
@@ -71,220 +222,88 @@ def get_source_examples(labs_batch, dataset, latent_name, id2labs_df):
     return batch
 
 
-def run_transfer(model, dataloader, params, id2labs_df, verbose=False):
-    model.eval()
-    results = []
-    if verbose is True:
-        pbar = tqdm(total=len(dataloader))
-    for (i, batch) in enumerate(dataloader):
-        in_Xbatch, out_Xbatch, Ybatch, lengths, batch_ids = batch
-        batch_size = in_Xbatch.size(0)
-        in_Xbatch = in_Xbatch.to(model.device)
-        out_Xbatch = out_Xbatch.to(model.device)
-        lengths = lengths.to(model.device)
-        # trg_output = {"decoder_logits": [batch_size, target_length, vocab_size]  # noqa
-        #           "latent_params": [Params(z, mu, logvar)] * batch_size
-        #           "dsc_logits": {latent_name: [batch_size, n_classes]}
-        #           "adv_logits": {latent_name-label_name: [batch_size, n_classes]}  # noqa
-        #           "token_predictions": [batch_size, target_length]
-        trg_output = model(in_Xbatch, lengths, teacher_forcing_prob=0.0)
-
-        trg_texts = []
-        for t in in_Xbatch:
-            toks = utils.tensor2text(t, dataloader.dataset.idx2word,
-                                     model.eos_token_idx)
-            trg_texts.append(' '.join(toks))
-
-        for latent_name in model.discriminators.keys():
-            src_batch = get_source_examples(
-                Ybatch, dataloader.dataset, latent_name, id2labs_df)
-            src_Xbatch, _, src_Ybatch, src_lengths, src_batch_ids = src_batch
-            src_Xbatch = src_Xbatch.to(model.device)
-            src_lengths = src_lengths.to(model.device)
-            src_output = model(src_Xbatch, src_lengths, teacher_forcing_prob=0.0)  # noqa
-
-            # Transfer the latent
-            trg_params = {latent_name: param.z.clone() for (latent_name, param)
-                          in trg_output["latent_params"].items()}
-            trg_params[latent_name] = src_output["latent_params"][latent_name].z.clone()  # noqa
-            z = torch.cat(list(trg_params.values()), dim=1)
-            # Decode from it
-            max_length = in_Xbatch.size(-1)
-            trans_output = model.sample(z, max_length=max_length)
-
-            # Log the source and transferred text
-            src_texts = []
-            trns_texts = []
-            for j in range(batch_size):
-                src_t = src_Xbatch[j, :]
-                src_toks = utils.tensor2text(
-                    src_t, dataloader.dataset.idx2word, model.eos_token_idx)
-                src_text = ' '.join(src_toks)
-                src_texts.append(src_text)
-
-                trns_t = trans_output["token_predictions"][j, :]
-                trns_toks = utils.tensor2text(trns_t,
-                                              dataloader.dataset.idx2word,
-                                              model.eos_token_idx)
-                trns_text = ' '.join(trns_toks)
-                trns_texts.append(trns_text)
-
-            # Re-encode the output to get the discriminators' predictions.
-            trans_batch = trans_output["token_predictions"].to(model.device)
-            output_prime = model(trans_batch, lengths,
-                                 teacher_forcing_prob=0.0)
-
-            pred_data = [{} for _ in range(batch_size)]
-            for (lat_name, dsc) in model.discriminators.items():
-                # If lat_name == latent_name, we want preds == src_Ybatch[latent_name]  # noqa
-                # Otherwise we want preds == trg_Ybatch[latent_name]
-                preds = dsc.predict(output_prime["dsc_logits"][lat_name])
-                preds = preds.detach().cpu().flatten().int().tolist()
-                if lat_name == latent_name:
-                    true_labs = src_Ybatch[lat_name].flatten().int().tolist()
-                else:
-                    true_labs = Ybatch[lat_name].flatten().int().tolist()
-                # Log the predictions
-                for j in range(batch_size):
-                    pred_data[j][lat_name] = {"true": true_labs[j],
-                                              "pred": preds[j]}
-            for j in range(batch_size):
-                row = {"latent": latent_name,
-                       "target": trg_texts[j],
-                       "source": src_texts[j],
-                       "transferred": trns_texts[j],
-                       "predictions": pred_data[j]}
-                results.append(row)
-        if verbose is True:
-            pbar.update(1)
-        else:
-            print(f"{i}/{len(dataloader)}", flush=True)
-    if verbose is True:
-        pbar.close()
-
-    return results
-
-
-def compute(args):
-    logging.basicConfig(level=logging.INFO)
-
-    SOS = "<SOS>"
-    EOS = "<EOS>"
-
-    params = json.load(open(args.params_file, 'r'))
-    utils.validate_params(params)
-    utils.set_seed(params["random_seed"])
-    logdir = os.path.join("logs", params["name"])
-
-    # Set logging directory
-    # Set model checkpoint directory
-    ckpt_dir = os.path.join(params["checkpoint_dir"], params["name"])
-    if not os.path.isdir(ckpt_dir):
-        os.makedirs(ckpt_dir)
-
-    # Read train data
-    label_keys = [lk for lk in params["latent_dims"].keys() if lk != "total"]
-    train_file = os.path.join(params["data_dir"], "train.jsonl")
-    tmp = data_utils.get_sentences_labels(
-        train_file, N=params["num_train_examples"], label_keys=label_keys)
-    train_sents, train_labs, train_ids, train_lab_counts = tmp
-    train_sents = data_utils.preprocess_sentences(train_sents, SOS, EOS)
-    train_labs, label_encoders = data_utils.preprocess_labels(train_labs)
-
-    # Read validation data
-    if args.dataset in ["dev", "test"]:
-        eval_file = os.path.join(params["data_dir"], f"{args.dataset}.jsonl")
-        print(f"Evaluating on {eval_file}")
-        tmp = data_utils.get_sentences_labels(eval_file, label_keys=label_keys)
-        eval_sents, eval_labs, eval_ids, eval_lab_counts = tmp
-        eval_sents = data_utils.preprocess_sentences(eval_sents, SOS, EOS)
-        # Use the label encoders fit on the train set
-        eval_labs, _ = data_utils.preprocess_labels(
-                eval_labs, label_encoders=label_encoders)
-
-    vocab_path = os.path.join(logdir, "vocab.txt")
-    vocab = [word.strip() for word in open(vocab_path)]
-    # word2idx/idx2word are used for encoding/decoding tokens
-    word2idx = {word: idx for (idx, word) in enumerate(vocab)}
-
-    # Load glove embeddings, if specified
-    # This redefines word2idx/idx2word
-    emb_matrix = None
-    if params["glove_path"] != "":
-        print(f"Loading embeddings from {params['glove_path']}")
-        glove, _ = utils.load_glove(params["glove_path"])
-        emb_matrix, word2idx = utils.get_embedding_matrix(vocab, glove)
-        print(f"Loaded embeddings with size {emb_matrix.shape}")
-    # idx2word = {idx: word for (word, idx) in word2idx.items()}
-
-    # Always load the train data since we need it to build the model
-    data = data_utils.DenoisingTextDataset(
-            train_sents, train_sents, train_labs, train_ids,
-            word2idx, label_encoders)
-    dataloader = torch.utils.data.DataLoader(
-            data, collate_fn=utils.pad_sequence_denoising,
-            shuffle=False, batch_size=params["batch_size"])
-    label_dims_dict = data.y_dims
-
-    if args.dataset == "train":
-        labs_df = pd.DataFrame(train_labs, index=train_ids)
-    elif args.dataset in ["dev", "test"]:
-        data = data_utils.DenoisingTextDataset(
-                eval_sents, eval_sents, eval_labs, eval_ids,
-                word2idx, label_encoders)
-        dataloader = torch.utils.data.DataLoader(
-                data, shuffle=True, batch_size=params["batch_size"],
-                collate_fn=utils.pad_sequence_denoising)
-        labs_df = pd.DataFrame(eval_labs, index=eval_ids)
-
-    sos_idx = word2idx[SOS]
-    eos_idx = word2idx[EOS]
-    vae = model.build_vae(params, len(vocab), emb_matrix, label_dims_dict,
-                          DEVICE, sos_idx, eos_idx)
-    optimizer = torch.optim.Adam(
-        vae.trainable_parameters(), lr=params["learn_rate"])
-
-    if not os.path.isdir(ckpt_dir):
-        raise OSError(f"No checkpoint found at '{ckpt_dir}'!")
-    vae, _, start_epoch, ckpt_fname = utils.load_latest_checkpoint(
-        vae, optimizer, ckpt_dir, map_location=DEVICE)
-    print(f"Loaded checkpoint from '{ckpt_fname}'")
-    print(vae)
-
-    results = run_transfer(vae, dataloader, params, labs_df, args.verbose)
-
-    with open(args.outfile, 'w') as outF:
-        for row in results:
-            json.dump(row, outF)
-            outF.write('\n')
-
-
 def summarize(args):
     results = [json.loads(line) for line in open(args.outfile)]
 
-    predictions = defaultdict(lambda: defaultdict(list))
+    inv_labels = defaultdict(list)
+    predictions = defaultdict(list)
     for result in results:
         latent = result["latent"]
-        for (label_type, preds) in result["predictions"].items():
-            true = preds["true"]
-            pred = preds["pred"]
-            if label_type == latent:
-                label_type = f"{label_type}: {str(true)}->{str(abs(1-true))}"
-            else:
-                label_type = f"{label_type}: {str(true)}"
-            predictions[latent][label_type].append(true == pred)
+        inv_labels[latent].append(result["inverse_label"])
+        predictions[latent].append(result["inverse_label_predicted"])
 
     print()
-    for (trns_latent, label_type_preds) in predictions.items():
-        print(f"   Transfering {trns_latent}")
-        print(" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-        print("|    Prediction      |  Accuracy  |")
-        print("|---------------------------------|")
-        for (label_type, preds) in label_type_preds.items():
-            acc = sum(preds) / len(preds)
-            print(f"|{label_type:^20}|{acc:^12.4f}|")
-        print(" --------------------------------- ")
+    for (latent, preds) in predictions.items():
+        inv_labs = np.array(inv_labels[latent])
+        preds = np.array(preds)
+        accs = {}
+        for lab_val in set(inv_labs):
+            idxs = np.where(inv_labs == lab_val)
+            acc = accuracy_score(inv_labs[idxs], preds[idxs])
+            accs[lab_val] = acc
+        print(f"Transfering {latent}")
+        print(" -------------------------------- ")
+        print("|  Transferring to  |  Accuracy  |")
+        print("|--------------------------------|")
+        for (label, acc) in accs.items():
+            print(f"|{label:^19}|{acc:^12.4f}|")
+        print(" -------------------------------- ")
         print()
+
+
+def uncollate(batch):
+    """
+    Modified from
+    https://lightning-flash.readthedocs.io/en/stable/_modules/flash/core/data/batch.html#default_uncollate  # noqa
+
+    This function is used to uncollate a batch into samples.
+    The following conditions are used:
+
+    - if the ``batch`` is a ``dict``, the result will be a list of dicts
+    - if the ``batch`` is list-like, the result is guaranteed to be a list
+
+    Args:
+        batch: The batch of outputs to be uncollated.
+
+    Returns:
+        The uncollated list of predictions.
+
+    Raises:
+        ValueError: If input ``dict`` values are not all list-like.
+        ValueError: If input ``dict`` values are not all the same length.
+        ValueError: If the input is not a ``dict`` or list-like.
+    """
+    def _is_list_like_excluding_str(x):
+        if isinstance(x, str):
+            return False
+        try:
+            iter(x)
+        except TypeError:
+            return False
+        return True
+
+    if isinstance(batch, dict):
+        if any(not _is_list_like_excluding_str(sub_batch)
+               for sub_batch in batch.values()):
+            raise ValueError("When uncollating a dict, all sub-batches (values) are expected to be list-like.")  # noqa
+        uncollated_vals = [uncollate(val) for val in batch.values()]
+        uncollated_keys_vals = [(key, uncollate(val))
+                                for (key, val) in batch.items()]
+        for (i, (k, v)) in enumerate(uncollated_keys_vals):
+            if len(v) == 0:
+                uncollated_vals.pop(i)
+                batch.pop(k)
+        if len(set([len(v) for v in uncollated_vals])) > 1:
+            print([(k, len(v)) for (k, v) in uncollated_keys_vals])
+            raise ValueError("When uncollating a dict, all sub-batches (values) are expected to have the same length.")  # noqa
+        elements = list(zip(*uncollated_vals))
+        return [dict(zip(batch.keys(), element)) for element in elements]
+    if isinstance(batch, (list, tuple, torch.Tensor)):
+        return list(batch)
+    raise ValueError(
+        "The batch of outputs to be uncollated is expected to be a `dict` or list-like "  # noqa
+        f"(e.g. `Tensor`, `list`, `tuple`, etc.), but got input of type: {type(batch)}"  # noqa
+    )
 
 
 if __name__ == "__main__":
