@@ -151,6 +151,8 @@ def query_predicates(db_conn, n=-1, cue_list=None, ignore_pmid_list=None):
     print("Done", flush=True)
     if len(cues) > 0:
         perc_matched = (num_matched / len(predications)) * 100
+    else:
+        perc_matched = 0.0
     print(f"{perc_matched:.2f}% predications matched cues.")
     return predications, pmids
 
@@ -265,14 +267,22 @@ def get_brat_event_from_row(row, semtype_map,
                        attributes={"indicatorType": attr})
     num_spans += 1
     long_subj_semtype = semtype_map[row.SUBJECT_SEMTYPE]
+    subj_cui_attr = pybrat.Attribute(f"A{num_attrs}", row.SUBJECT_CUI,
+                                     _type="CUI")
+    num_attrs += 1
     subj = pybrat.Span(f"T{num_spans}", row.SUBJECT_START_INDEX,
                        row.SUBJECT_END_INDEX, row.SUBJECT_TEXT,
-                       _type=long_subj_semtype)
+                       _type=long_subj_semtype,
+                       attributes={"cui": subj_cui_attr})
     num_spans += 1
     long_obj_semtype = semtype_map[row.OBJECT_SEMTYPE]
+    obj_cui_attr = pybrat.Attribute(f"A{num_attrs}", row.OBJECT_CUI,
+                                    _type="CUI")
+    num_attrs += 1
     obj = pybrat.Span(f"T{num_spans}", row.OBJECT_START_INDEX,
                       row.OBJECT_END_INDEX, row.OBJECT_TEXT,
-                      _type=long_obj_semtype)
+                      _type=long_obj_semtype,
+                      attributes={"cui": obj_cui_attr})
     num_spans += 1
     event = pybrat.Event(f"E{num_events}", pred, subj, obj,
                          _type=pred.type, _source_file=f"{row.PMID}.ann")
