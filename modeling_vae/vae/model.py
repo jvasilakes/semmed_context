@@ -435,9 +435,7 @@ class VariationalSeq2Seq(nn.Module):
             alogits = adv(latent_params[latent_name].z)
             adv_logits[name] = alogits
 
-        # TODO: it only is consistent because I set the random seed.
-        #       sort latent_params by key, but always putting content last.
-        zs = [param.z for param in latent_params.values()]
+        zs = [latent_params[task].z for task in sorted(latent_params.keys())]
         z = torch.cat(zs, dim=1)
         decoder_hidden = self.compute_hidden(z, batch_size)
         # decoder_hidden = encoder_hidden

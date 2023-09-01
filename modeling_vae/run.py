@@ -467,13 +467,7 @@ def run(args):
     if not os.path.isdir(ckpt_dir):
         os.makedirs(ckpt_dir)
 
-    label_keys = [lk for lk in params.Model.latent_dims.value.keys()
-                  if lk != "total"]
-    # We need to know the source dataset for batching using RatioSampler
-    label_keys.append("source_dataset")
-
     # Read train data
-
     # Always load the train data since we need it to build the model
     datamodule_cls = data.DATAMODULE_REGISTRY[params.Data.dataset_name.value]
     dm = datamodule_cls(params)
