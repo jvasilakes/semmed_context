@@ -17,6 +17,7 @@ def parse_args():
 
 
 def main(args):
+    os.makedirs(args.outdir, exist_ok=True)
     orig_glob = os.path.join(args.orig_dataset, "*.ann")
     for orig_file in glob(orig_glob):
         bn = os.path.basename(orig_file)
@@ -32,7 +33,7 @@ def main(args):
                     new_attr.reference = orig_span
                     orig_anns.add_annotation(new_attr)
                     break
-    # TODO: save new annotations
+        orig_anns.save_brat(args.outdir)
 
 
 if __name__ == "__main__":
