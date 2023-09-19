@@ -289,22 +289,22 @@ class ConceptNetDataset(object):
     LABEL_ENCODINGS = {"polarity": {0: 0,
                                     1: 1},
                        "predicate": {
-                           "AtLocation":      1,
-                           "CapableOf":       2,
-                           "Causes":          3,
-                           "CausesDesire":    4,
-                           "Desires":         5,
-                           "HasA":            6,
-                           "HasPrerequisite": 7,
-                           "HasProperty":     8,
-                           "HasSubevent":     9,
-                           "IsA":             10,
-                           "MadeOf":          11,
-                           "MotivatedByGoal": 12,
-                           "NotDesires":      13,
-                           "PartOf":          14,
-                           "ReceivesAction":  15,
-                           "UsedFor":         16
+                           "AtLocation":      0,
+                           "CapableOf":       1,
+                           "Causes":          2,
+                           "CausesDesire":    3,
+                           "Desires":         4,
+                           "HasA":            5,
+                           "HasPrerequisite": 6,
+                           "HasProperty":     7,
+                           "HasSubevent":     8,
+                           "IsA":             9,
+                           "MadeOf":          10,
+                           "MotivatedByGoal": 11,
+                           "NotDesires":      12,
+                           "PartOf":          13,
+                           "ReceivesAction":  14,
+                           "UsedFor":         15
                         }
                        }
 
