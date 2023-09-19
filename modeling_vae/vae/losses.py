@@ -126,9 +126,9 @@ class CLUBSample(nn.Module):
 
 
 def compute_bleu(Xbatch, pred_batch, tokenizer):
-    Xtext = [tokenizer.convert_ids_to_tokens(ids)
+    Xtext = [[tokenizer.convert_ids_to_tokens(ids, skip_special_tokens=True)]
              for ids in Xbatch.cpu().detach()]
-    pred_text = [tokenizer.convert_ids_to_tokens(ids)
+    pred_text = [tokenizer.convert_ids_to_tokens(ids, skip_special_tokens=True)
                  for ids in pred_batch.cpu().detach()]
     bleu = bleu_score(pred_text, Xtext)
     return bleu
