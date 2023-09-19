@@ -572,7 +572,7 @@ def run(args):
         evalstep(vae, val_dataloader, params, start_epoch, dm.tokenizer,
                  verbose=not args.quiet, summary_writer=val_writer, logdir=logdir)  # noqa
         utils.log_reconstructions(vae, val_data_to_log, dm.tokenizer,
-                                  "val", epoch, logdir)
+                                  "val", start_epoch, logdir)
 
     # TEST
     if args.command == "test":
@@ -580,7 +580,7 @@ def run(args):
                  dm.tokenizer, verbose=not args.quiet,
                  summary_writer=test_writer, logdir=logdir, name="test")
         utils.log_reconstructions(vae, test_data_to_log, dm.tokenizer,
-                                  "test", epoch, logdir)
+                                  "test", start_epoch, logdir)
 
     now = datetime.datetime.now()
     now_str = now.strftime("%Y-%m-%d_%H:%M:%S")
