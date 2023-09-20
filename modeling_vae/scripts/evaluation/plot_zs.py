@@ -21,7 +21,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", type=str)
     parser.add_argument("--data_split", type=str,
-                        choices=["train", "dev", "test"])
+                        choices=["train", "val", "test"])
     parser.add_argument("--epoch", type=int, default=-1)
     return parser.parse_args()
 

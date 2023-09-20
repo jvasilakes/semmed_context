@@ -258,3 +258,17 @@ def log_reconstructions(model, examples, tokenizer, name, epoch, logdir):
     with open(recon_file, 'a') as outF:
         json.dump(out_data, outF)
         outF.write('\n')
+
+
+def send_to_device(collection, device):
+    if torch.is_tensor(collection):
+        if collection.device != device:
+            return collection.to(device)
+
+    if isinstance(collection, dict):
+        for key in collection.keys():
+            collection[key] = send_to_device(collection[key], device)
+    elif isinstance(collection, (list, tuple, set)):
+        for i in range(len(collection)):
+            collection[i] = send_to_device(collection[i], device)
+    return collection

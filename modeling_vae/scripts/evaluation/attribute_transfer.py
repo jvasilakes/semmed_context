@@ -34,7 +34,7 @@ def parse_args():
         "config_file", type=str,
         help="YAML config file for experiment to evaluate.")
     compute_parser.add_argument("datasplit", type=str,
-                                choices=["train", "dev", "test"],
+                                choices=["train", "val", "test"],
                                 help="Which data split to run on.")
     compute_parser.add_argument("--verbose", action="store_true",
                                 default=False)
@@ -134,6 +134,7 @@ def run_transfer(model, dataloader, params, id2labs_df, tokenizer,
             ex["input_ids"] = in_Xbatch[j]
             ex["labels"] = {task: vals[j] for (task, vals) in Ybatch.items()}
             ex["length"] = lengths[j]
+            ex = utils.send_to_device(ex, "cpu")
             logged_outputs.append(ex)
 
         for (task, vals) in Ybatch.items():
@@ -158,7 +159,7 @@ def run_transfer(model, dataloader, params, id2labs_df, tokenizer,
             for inverse_lab in other_labs:
                 inverse_mu, inverse_logvar = latents_by_task[task][inverse_lab]
                 inverse_var = inverse_logvar.exp()
-                inverse_z = D.Normal(inverse_mu, inverse_var).sample().to(model.device)  # noqa
+                inverse_z = D.Normal(inverse_mu, inverse_var).sample().cpu()
                 trg_params = {latent_name: param["z"].clone()
                               for (latent_name, param)
                               in example["latent_params"].items()}
@@ -166,9 +167,9 @@ def run_transfer(model, dataloader, params, id2labs_df, tokenizer,
                 zs = [trg_params[task] for task in sorted(trg_params.keys())]
                 z = torch.cat(zs).unsqueeze(0)
                 max_length = example["length"] + 5
-                transferred_output = model.sample(z, max_length=max_length)
+                transferred_output = model.sample(z.to(model.device), max_length=max_length)
 
-                inverse_logits = model.discriminators[task](inverse_z.unsqueeze(0))
+                inverse_logits = model.discriminators[task](inverse_z.unsqueeze(0).to(model.device))
                 inverse_pred = model.discriminators[task].predict(inverse_logits)
 
                 source_text = tokenizer.decode(example["input_ids"],

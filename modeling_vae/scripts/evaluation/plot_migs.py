@@ -78,7 +78,7 @@ def plot_mis_migs(mi_dfs, mig_dfs, names):
         for (patch, color) in zip(box["boxes"], colors):
             patch.set_facecolor(color)
         axs[0, i].set_title(model_name, fontsize=16)
-        axs[0, i].set_ylim(0.0, 0.8)
+        #axs[0, i].set_ylim(0.0, 0.8)
         xticklabels = [name.title() for name in mig_df.columns]
         axs[0, i].set_xticklabels(xticklabels)
         if i == 0:
