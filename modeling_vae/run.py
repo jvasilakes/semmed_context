@@ -569,6 +569,7 @@ def run(args):
 
     # VALIDATE
     if args.command == "validate":
+        start_epoch = start_epoch - 1
         evalstep(vae, val_dataloader, params, start_epoch, dm.tokenizer,
                  verbose=not args.quiet, summary_writer=val_writer, logdir=logdir)  # noqa
         utils.log_reconstructions(vae, val_data_to_log, dm.tokenizer,
@@ -576,6 +577,7 @@ def run(args):
 
     # TEST
     if args.command == "test":
+        start_epoch = start_epoch - 1
         evalstep(vae, test_dataloader, params, start_epoch,
                  dm.tokenizer, verbose=not args.quiet,
                  summary_writer=test_writer, logdir=logdir, name="test")
