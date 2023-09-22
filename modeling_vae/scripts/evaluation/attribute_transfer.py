@@ -54,8 +54,9 @@ def compute(args):
 
     # Set logging directory
     # Set model checkpoint directory
-    ckpt_dir = os.path.join(params.Experiment.checkpoint_dir.value,
-                            params.Experiment.name.value)
+    ckpt_dir = os.path.join(params.Experiment.logdir.value,
+                            params.Experiment.name.value,
+                            "checkpoints")
     if not os.path.isdir(ckpt_dir):
         raise OSError(f"No checkpoint found at '{ckpt_dir}'!")
 
@@ -90,7 +91,7 @@ def compute(args):
                            args.verbose)
 
     outfile = os.path.join(
-        params.Experiment.checkpoint_dir.value,
+        params.Experiment.logdir.value,
         params.Experiment.name.value,
         f"evaluation/attribute_transfer_{args.datasplit}.json")
     with open(outfile, 'w') as outF:

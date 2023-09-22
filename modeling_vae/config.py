@@ -12,7 +12,7 @@ def name(val):
 
 
 @config.parameter(group="Experiment", types=str)
-def checkpoint_dir(val):
+def logdir(val):
     pass
 
 

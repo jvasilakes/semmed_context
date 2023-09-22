@@ -449,7 +449,8 @@ def run(args):
     utils.set_seed(params.Experiment.random_seed.value)
 
     # Set logging directory
-    logdir = os.path.join("logs", params.Experiment.name.value)
+    logdir = os.path.join(params.Experiment.logdir.value,
+                          params.Experiment.name.value)
     os.makedirs(logdir, exist_ok=True)
     logfile = os.path.join(logdir, "run.log")
     print(f"Logging to {logfile}")
@@ -462,8 +463,9 @@ def run(args):
     logging.info(str(params))
 
     # Set model checkpoint directory
-    ckpt_dir = os.path.join(params.Experiment.checkpoint_dir.value,
-                            params.Experiment.name.value)
+    ckpt_dir = os.path.join(params.Experiment.logdir.value,
+                            params.Experiment.name.value,
+                            "checkpoints")
     if not os.path.isdir(ckpt_dir):
         os.makedirs(ckpt_dir)
 

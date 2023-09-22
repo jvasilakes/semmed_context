@@ -77,10 +77,10 @@ def compute(args, model=None):
         Evaluate above model on data_dir/{train,dev,test}.jsonl
     """
     config.load_yaml(args.config_file)
-    metadata_dir = os.path.join(config.Experiment.checkpoint_dir.value,
+    metadata_dir = os.path.join(config.Experiment.logdir.value,
                                 config.Experiment.name.value,
                                 "metadata")
-    outdir = os.path.join(config.Experiment.checkpoint_dir.value,
+    outdir = os.path.join(config.Experiment.logdir.value,
                           config.Experiment.name.value,
                           "evaluation/disentanglement")
 
@@ -419,7 +419,7 @@ def test_bijective_oracle(N, K, n_features=1, predictive=False):
 
 def summarize_results(args):
     config.load_yaml(args.config_file)
-    outdir = os.path.join(config.Experiment.checkpoint_dir.value,
+    outdir = os.path.join(config.Experiment.logdir.value,
                           config.Experiment.name.value,
                           "evaluation/disentanglement")
 

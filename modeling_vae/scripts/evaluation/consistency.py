@@ -68,8 +68,9 @@ def compute(args):
     now_str = now.strftime("%Y-%m-%d_%H:%M:%S")
     logging.info(f"START: {now_str}")
 
-    ckpt_dir = os.path.join(params.Experiment.checkpoint_dir.value,
-                            params.Experiment.name.value)
+    ckpt_dir = os.path.join(params.Experiment.logdir.value,
+                            params.Experiment.name.value,
+                            "checkpoints")
     if not os.path.isdir(ckpt_dir):
         raise OSError(f"No model found at {ckpt_dir}")
 
@@ -189,7 +190,7 @@ def compute(args):
             row = [resample, label_name, "y_hat", "y_hat_prime", p, r, f]
             results.append(row)
 
-    outdir = os.path.join(params.Experiment.checkpoint_dir.value,
+    outdir = os.path.join(params.Experiment.logdir.value,
                           params.Experiment.name.value,
                           "evaluation/consistency")
     os.makedirs(outdir, exist_ok=True)
@@ -213,7 +214,7 @@ def compute(args):
 
 def summarize(args):
     params.load_yaml(args.config_file)
-    outdir = os.path.join(params.Experiment.checkpoint_dir.value,
+    outdir = os.path.join(params.Experiment.logdir.value,
                           params.Experiment.name.value,
                           "evaluation/consistency")
     infile = os.path.join(

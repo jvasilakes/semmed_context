@@ -55,7 +55,7 @@ def main(args):
         logging.info(f"({datasplit}) orig: {ppl:.4f} | recon: {recon_ppl:4f}")
 
     outfile = os.path.join(
-        params.Experiment.checkpoint_dir.value,
+        params.Experiment.logdir.value,
         params.Experiment.name.value,
         "evaluation/perplexity.jsonl")
     with open(outfile, 'w') as outF:
@@ -99,8 +99,9 @@ def reconstruct_with_model(params, N=-1, num_resamples=1, verbose=False):
 
     # Set logging directory
     # Set model checkpoint directory
-    ckpt_dir = os.path.join(params.Experiment.checkpoint_dir.value,
-                            params.Experiment.name.value)
+    ckpt_dir = os.path.join(params.Experiment.logdir.value,
+                            params.Experiment.name.value,
+                            "checkpoints")
     if not os.path.isdir(ckpt_dir):
         raise OSError(f"No checkpoint found at '{ckpt_dir}'!")
 

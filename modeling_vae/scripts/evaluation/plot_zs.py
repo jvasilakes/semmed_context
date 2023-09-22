@@ -28,7 +28,7 @@ def parse_args():
 
 def main(args):
     config.load_yaml(args.config_file)
-    metadata_dir = os.path.join(config.Experiment.checkpoint_dir.value,
+    metadata_dir = os.path.join(config.Experiment.logdir.value,
                                 config.Experiment.name.value,
                                 "metadata")
     zs_dir = os.path.join(metadata_dir, 'z')

@@ -49,49 +49,6 @@ class AutogradDebugger(torch.autograd.detect_anomaly):
         pdb.set_trace()
 
 
-def validate_params(params):
-    valid_params = {
-            "name": str,  # experiment name
-            "random_seed": int,
-            "data_dir": str,  # directory with {train,dev,test}.jsonl
-            "combined_dataset": bool,  # whether data_dir contains a "data_source" key  # noqa
-            "dataset_minibatch_ratios": dict,  # {data_source_value: [0,1]}
-            "checkpoint_dir": str,
-            "glove_path": str,
-            "num_train_examples": int,  # -1 for all examples
-            "lowercase": bool,  # whether to lowercase input
-            "reverse_input": bool,
-            "embedding_dim": int,  # unused if glove_path != ""
-            "hidden_dim": int,  # RNN hidden dim. unused if num_rnn_layers == 1.  # noqa
-            "num_rnn_layers": int,
-            "bidirectional_encoder": bool,
-            "bow_encoder": bool,  # overrides bidirectional_encoder
-            "latent_dims": dict,
-            "epochs": int,
-            "batch_size": int,
-            "learn_rate": float,
-            "encoder_dropout": float,
-            "decoder_dropout": float,
-            "teacher_forcing_prob": float,
-            "lambdas": dict,  # KL div weights for each latent space.
-            "adversarial_loss": bool,  # Use adversarial objective.
-            "mi_loss": bool,   # Use mutual info minimization objective.
-            "train": bool,
-            "validate": bool,
-            "test": bool}
-    for (key, val) in valid_params.items():
-        if key not in params.keys():
-            raise ValueError(f"parameter file missing '{key}'")
-        if not isinstance(params[key], val):
-            param_type = type(params[key])
-            raise ValueError(f"Parameter '{key}' of incorrect type!")
-            raise ValueError(f"  Expected '{val}' but got '{param_type}'.")
-
-    for key in params.keys():
-        if key not in valid_params.keys():
-            print(f"WARNING: Ignoring unused parameter '{key}' in parameter file.")  # noqa
-
-
 def load_glove(path):
     """
     Load the GLoVe embeddings from the provided path.
