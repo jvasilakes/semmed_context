@@ -44,7 +44,7 @@ def parse_args():
     compute_parser.add_argument("config_file", type=str,
                                 help="Config file for experiment to evaluate.")
     compute_parser.add_argument("datasplit", type=str,
-                                choices=["train", "dev", "test"],
+                                choices=["train", "val", "test"],
                                 help="Data split to run on.")
     compute_parser.add_argument("--epoch", type=int, default=-1,
                                 help="""Which epoch to run on.
@@ -58,7 +58,7 @@ def parse_args():
     summ_parser.add_argument("config_file", type=str,
                              help="Config file for experiment to evaluate.")
     summ_parser.add_argument("datasplit", type=str,
-                             choices=["train", "dev", "test"],
+                             choices=["train", "val", "test"],
                              help="Dataset to run on.")
 
     args = parser.parse_args()

@@ -23,7 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("config_file", type=str)
     parser.add_argument("data_split", type=str,
-                        choices=["train", "dev", "test"])
+                        choices=["train", "val", "test"])
     parser.add_argument("--num_resamples", type=int, default=10)
     return parser.parse_args()
 

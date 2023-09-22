@@ -53,7 +53,7 @@ def parse_args():
                              help="""Path to YAML file containing
                                      experiment parameters.""")
     summ_parser.add_argument("datasplit", type=str,
-                             choices=["train", "dev", "test"],
+                             choices=["train", "val", "test"],
                              help="Dataset to summarize.")
 
     return parser.parse_args()
