@@ -549,7 +549,6 @@ def run(args):
                              verbose=not args.quiet, summary_writer=val_writer,
                              logdir=logdir)
                     # Log val inputs and their reconstructions
-                    val_data_to_log = dm.dataset.val[:20]
                     utils.log_reconstructions(
                         vae, val_data_to_log, dm.tokenizer, "val",
                         epoch, logdir)
