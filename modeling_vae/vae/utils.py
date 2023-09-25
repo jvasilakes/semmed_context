@@ -196,13 +196,13 @@ def tensor2text(tensor, idx2word, eos_token_idx):
 
 def get_reconstructions(model, examples, tokenizer):
     batch = min_pad_collate(examples)
-    inX = batch["json"]["encoded"]["input_ids"].to(model.device)
-    lengths = batch["json"]["encoded"]["lengths"].to(model.device)
-    output = model(inX, lengths, teacher_forcing_prob=0.0)
+    inX = send_to_device(batch["json"]["encoded"], model.device)
+    output = model(inX, teacher_forcing_prob=0.0)
 
     recon_text = tokenizer.batch_decode(output["token_predictions"],
                                         skip_special_tokens=True)
-    target_text = tokenizer.batch_decode(inX, skip_special_tokens=True)
+    target_text = tokenizer.batch_decode(inX["input_ids"],
+                                         skip_special_tokens=True)
     return [{"target": target_text[i], "reconstruction": recon_text[i]}
             for i in range(len(recon_text))]
 

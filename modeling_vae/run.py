@@ -234,7 +234,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
             pbar = tqdm(dataloader)
     step = 0
     for (i, batch) in enumerate(dataloader):
-        in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
+        in_Xbatch = utils.send_to_device(batch["json"]["encoded"], model.device)
         target_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
         Ybatch = {}
         for (task, val) in batch["json"]["labels"].items():
@@ -248,7 +248,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         #           "adv_logits": {latent_name-label_name: [batch_size, n_classes]}  # noqa
         #           "token_predictions": [batch_size, target_length]
         output = model(
-            in_Xbatch, lengths,
+            in_Xbatch,
             teacher_forcing_prob=params.Training.teacher_forcing_prob.value)
 
         kl_weights_dict = {}
@@ -307,7 +307,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         # Measure Autoencoding by reencoding the reconstructed output.
         x_prime = output["token_predictions"].to(model.device)
         output_prime = model(
-            x_prime, lengths,
+            {"input_ids": x_prime, "lengths": lengths},
             teacher_forcing_prob=params.Training.teacher_forcing_prob.value)
 
         for (l_name, l_params) in output_prime["latent_params"].items():
@@ -378,7 +378,7 @@ def evalstep(model, dataloader, params, epoch, tokenizer, name="val",
         except TypeError:  # WebLoader has no __len__
             pbar = tqdm(dataloader)
     for (i, batch) in enumerate(dataloader):
-        in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
+        in_Xbatch = utils.send_to_device(batch["json"]["encoded"], model.device)
         target_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
         Ybatch = {}
         for (task, val) in batch["json"]["labels"].items():
@@ -386,7 +386,7 @@ def evalstep(model, dataloader, params, epoch, tokenizer, name="val",
         lengths = batch["json"]["encoded"]["lengths"].to(model.device)
         batch_ids = batch["__key__"]
 
-        output = model(in_Xbatch, lengths, teacher_forcing_prob=0.0)
+        output = model(in_Xbatch, teacher_forcing_prob=0.0)
 
         kl_weights_dict = {}
         lambdas = params.Training.lambdas.value
