@@ -17,16 +17,24 @@ def register_datamodule(name):
     return add_to_registry
 
 
-def min_pad_collate(batch):
-    max_length = max([len(ex["json"]["encoded"]["input_ids"])
+def min_pad_batch(batch, key):
+    max_length = max([len(ex["json"][key]["input_ids"])
                       for ex in batch])
     for ex in batch:
-        input_ids = ex["json"]["encoded"]["input_ids"]
+        input_ids = ex["json"][key]["input_ids"]
         pad_length = max_length - len(input_ids)
         if pad_length == 0:
             continue
         id_pad = torch.zeros(pad_length, dtype=torch.long)
-        ex["json"]["encoded"]["input_ids"] = torch.cat([input_ids, id_pad])
+        ex["json"][key]["input_ids"] = torch.cat([input_ids, id_pad])
+
+
+def min_pad_collate(batch):
+    keys = ["encoded"]
+    if "target_encoded" in batch[0]["json"].keys():
+        keys.append("target_encoded")
+    for key in keys:
+        min_pad_batch(batch, key)
     collated = default_collate(batch)
     return collated
 

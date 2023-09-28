@@ -164,6 +164,56 @@ class LSTMTripleEncoder(Encoder):
         return example
 
 
+@register_encoder("lstm-triple-recon")
+class LSTMTripleReconEncoder(Encoder):
+
+    @classmethod
+    def from_config(cls, config):
+        return cls()
+
+    def __init__(self):
+        super().__init__(bert_model_name_or_path="bert-base-uncased",
+                         max_seq_length=256, cache=True)
+
+    def encode_single_example(self, example):
+        data = example["json"]
+        subj_obj_str = f"{data['subject'][0]} [SEP] {data['object'][0]}"
+        data["text"] = [data["text"], subj_obj_str]
+        encoded = self.tokenizer(*data["text"], max_length=self.max_seq_length,
+                                 padding=False, truncation=True,
+                                 return_token_type_ids=False,
+                                 return_attention_mask=False)
+
+        data["encoded"] = {k: torch.as_tensor(v)
+                           for (k, v) in encoded.items()}
+        data["encoded"]["lengths"] = len(data["encoded"]["input_ids"])
+        target_predicate = self.get_predicate_text(data)
+        target_encoded = self.tokenizer(
+            target_predicate, max_length=self.max_seq_length,
+            padding=False, truncation=True, return_token_type_ids=False,
+            return_attention_mask=False)
+        data["target_encoded"] = {k: torch.as_tensor(v)
+                                  for (k, v) in target_encoded.items()}
+        data["target_encoded"]["lengths"] = len(data["target_encoded"]["input_ids"])  # noqa
+        return example
+
+    def get_predicate_text(self, data):
+        subj = data["subject"][0]
+        obj = data["object"][0]
+        pred = data["labels"]["Predicate"].replace('_', ' ')
+        unc_val = data["labels"]["Certainty"]
+        unc_text = "might" if unc_val == "Uncertain" else None
+        pol_val = data["labels"]["Polarity"]
+        pol_text = None
+        if pol_val == "Negative":
+            pol_text = "not"
+            if unc_val == "Certain":
+                pol_text = "does not"
+        txts = [subj, unc_text, pol_text, pred, obj]
+        pred_text = ' '.join([txt for txt in txts if txt is not None])
+        return pred_text
+
+
 @register_encoder("default")
 class DefaultEncoder(Encoder):
 
