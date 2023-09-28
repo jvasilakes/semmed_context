@@ -31,7 +31,7 @@ def dataset_name(val):
     assert val != ''
 
 
-@config.parameter(group="Data", default="all", types=(str,list))
+@config.parameter(group="Data", default="all", types=(str, list))
 def tasks_to_load(val):
     pass
 
@@ -123,6 +123,19 @@ def lambdas(val):
         assert isinstance(name, str)
         assert name != ''
         assert isinstance(lam, float)
+
+
+@config.parameter(group="Training", default={}, types=dict)
+def loss_weights(val):
+    """
+    How to weight each class when computing the discriminator loss.
+    """
+    for (name, weights) in val.items():
+        assert isinstance(name, str)
+        assert name != ''
+        assert isinstance(weights, list)
+        for w in weights:
+            assert isinstance(w, float)
 
 
 @config.parameter(group="Training", default=False, types=bool)

@@ -5,7 +5,7 @@ from collections import namedtuple
 # External packages
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from sklearn.metrics import f1_score
 
 from vae import losses
 
@@ -166,20 +166,25 @@ class VariationalDecoder(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, name, latent_dim, output_dim):
+    def __init__(self, name, latent_dim, output_dim, loss_weights=None):
         super(Discriminator, self).__init__()
         self._device = torch.device("cpu")
         self.name = name
         self.latent_dim = latent_dim
         self.output_dim = output_dim
+        self.loss_weights = loss_weights
         self.linear = nn.Linear(latent_dim, output_dim)
         assert self.output_dim > 0
         if self.output_dim == 1:
-            self.loss_fn = F.binary_cross_entropy_with_logits
+            if loss_weights is not None:
+                loss_weights = loss_weights[1]
+            self.loss_fn = nn.BCEWithLogitsLoss(
+                pos_weight=torch.as_tensor(loss_weights))
             self.activation = torch.sigmoid
             self.activation_args = []
         else:
-            self.loss_fn = F.cross_entropy
+            self.loss_fn = nn.CrossEntropyLoss(
+                weight=torch.as_tensor(loss_weights))
             self.activation = torch.softmax
             self.activation_args = [-1]
 
@@ -195,7 +200,6 @@ class Discriminator(nn.Module):
     def forward(self, inputs):
         return self.linear(inputs)
 
-    # TODO: add parameter to pass label weights for balancing
     def compute_loss(self, logits, targets):
         if self.output_dim > 1:
             targets = targets.squeeze()
@@ -215,12 +219,19 @@ class Discriminator(nn.Module):
         acc = torch.mean((preds == targets).float())
         return acc
 
+    def compute_f1(self, logits, targets):
+        preds = self.predict(logits).cpu()
+        targets = targets.squeeze().cpu()
+        f1 = f1_score(targets, preds, average="macro")
+        return f1
+
 
 class AdversarialDiscriminator(Discriminator):
-    def __init__(self, latent_name, label_name, latent_dim, output_dim):
+    def __init__(self, latent_name, label_name, latent_dim, output_dim,
+                 loss_weights=None):
         name = f"{latent_name}-{label_name}"
         super(AdversarialDiscriminator, self).__init__(
-            name, latent_dim, output_dim)
+            name, latent_dim, output_dim, loss_weights=loss_weights)
         self.latent_name = latent_name
         self.label_name = label_name
         self.optimizer = torch.optim.Adam(self.parameters(), lr=3e-4)
@@ -268,13 +279,14 @@ class VariationalSeq2Seq(nn.Module):
                              [polarity_dsc, modality_dsc], sos, eos)
     """
     def __init__(self, encoder, decoder, discriminators, latent_dim,
-                 sos_token_idx, eos_token_idx, adversarial_loss=False,
-                 mi_loss=False):
+                 sos_token_idx, eos_token_idx, entity_dim=0,
+                 adversarial_loss=False, mi_loss=False):
         super(VariationalSeq2Seq, self).__init__()
         self._device = torch.device("cpu")
         self.encoder = encoder
         self.decoder = decoder
         self.latent_dim = latent_dim
+        self.entity_dim = entity_dim
         self.discriminators = nn.ModuleDict()  # Name: Discriminator
         self.context2params = nn.ModuleDict()  # Name: (mu,logvar) linear layer
 
@@ -293,13 +305,22 @@ class VariationalSeq2Seq(nn.Module):
             self.context2params[dsc.name] = params_layer
         assert self.dsc_latent_dim <= self.latent_dim
 
+        if self.entity_dim > 0:
+            for entity_role in ["subject", "object"]:
+                self.dsc_latent_dim += self.entity_dim
+                params_layer = nn.Linear(
+                    linear_insize, 2 * self.entity_dim)
+                self.context2params[entity_role] = params_layer
+        assert self.dsc_latent_dim <= self.latent_dim
+
         # Left over latent dims are treated as a generic "content" space
+        content_dim = 0
         if self.dsc_latent_dim < self.latent_dim:
-            leftover_latent_dim = self.latent_dim - self.dsc_latent_dim
-            leftover_layer = nn.Linear(
-                linear_insize, 2 * leftover_latent_dim)
-            self.context2params["content"] = leftover_layer
-            assert self.dsc_latent_dim + leftover_latent_dim == self.latent_dim
+            content_dim = self.latent_dim - self.dsc_latent_dim
+            content_layer = nn.Linear(
+                linear_insize, 2 * content_dim)
+            self.context2params["content"] = content_layer
+            assert self.dsc_latent_dim + content_dim == self.latent_dim
 
         # Adversarial heads
         self.adversarial_loss = adversarial_loss
@@ -315,8 +336,9 @@ class VariationalSeq2Seq(nn.Module):
         else:
             self.mi_estimators = dict()
 
+        latent_dim = self.latent_dim - content_dim
         self.z2hidden = nn.Linear(
-                self.latent_dim, 2 * decoder.hidden_size * decoder.num_layers)
+                latent_dim, 2 * decoder.hidden_size * decoder.num_layers)
         self.sos_token_idx = sos_token_idx
         self.eos_token_idx = eos_token_idx
 
@@ -329,7 +351,8 @@ class VariationalSeq2Seq(nn.Module):
                     continue
                 # Try to predict label_name from latent_name
                 adversary = AdversarialDiscriminator(
-                    latent_name, label_name, latent_size, dsc.output_dim)
+                    latent_name, label_name, latent_size, dsc.output_dim,
+                    loss_weights=dsc.loss_weights)
                 name = f"{latent_name}-{label_name}"
                 adversaries[name] = adversary
         return adversaries
@@ -410,10 +433,8 @@ class VariationalSeq2Seq(nn.Module):
         cell = torch.stack(cell, dim=0)
         return (state, cell)
 
-    def forward(self, inputs, teacher_forcing_prob=0.5):
+    def forward(self, input_ids, lengths, teacher_forcing_prob=0.5):
         # inputs: [batch_size, max(lengths)]
-        input_ids = inputs["input_ids"]
-        lengths = inputs["lengths"]
         batch_size = input_ids.size(0)
 
         if isinstance(self.encoder, BOWEncoder):
@@ -437,7 +458,10 @@ class VariationalSeq2Seq(nn.Module):
             alogits = adv(latent_params[latent_name].z)
             adv_logits[name] = alogits
 
-        zs = [latent_params[task].z for task in sorted(latent_params.keys())]
+        latent_names = sorted(latent_params.keys())
+        # TODO: Hard coding the removal of content is a temporary hack.
+        latent_names.remove("content")
+        zs = [latent_params[task].z for task in latent_names]
         z = torch.cat(zs, dim=1)
         decoder_hidden = self.compute_hidden(z, batch_size)
         # decoder_hidden = encoder_hidden
@@ -447,7 +471,7 @@ class VariationalSeq2Seq(nn.Module):
         decoder_input = decoder_input.repeat(batch_size, 1)
         input_lengths = [1] * batch_size
         vocab_size = self.decoder.vocab_size
-        target_length = input_ids.size(-1)
+        target_length = lengths.max()
         # Placeholder for predictions
         out_logits = torch.zeros(
                 batch_size, target_length, vocab_size).to(self.device)
@@ -557,14 +581,24 @@ def build_vae(params, vocab_size, emb_matrix, label_dims, device,
             # Binary uses a single dimension.
             if latent_dim == 2:
                 latent_dim = 1
-        dsc = Discriminator(name, latent_dim, outdim)
+        try:
+            loss_weights = params.Training.loss_weights.value[name]
+        except KeyError:
+            loss_weights = None
+        dsc = Discriminator(name, latent_dim, outdim,
+                            loss_weights=loss_weights)
         dsc.set_device(device)
         discriminators.append(dsc)
+
+    try:
+        entity_dim = params.Model.latent_dims.value["entity"]
+    except KeyError:
+        entity_dim = 0
 
     vae = VariationalSeq2Seq(
         encoder, decoder, discriminators,
         params.Model.latent_dims.value["total"],
-        sos_token_idx, eos_token_idx,
+        sos_token_idx, eos_token_idx, entity_dim=entity_dim,
         adversarial_loss=params.Training.adversarial_loss.value,
         mi_loss=params.Training.mi_loss.value)
     vae.set_device(device)
