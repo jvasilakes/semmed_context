@@ -5,7 +5,7 @@ import sys
 import json
 import argparse
 from glob import glob
-from tqdm import trange
+from tqdm import trange, tqdm
 from collections import Counter, defaultdict
 
 import torch
@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 
 
 sys.path.insert(0, os.getcwd())
@@ -122,7 +122,7 @@ def compute(args, model=None):
     for i in trange(args.num_resamples):
         mis = defaultdict(dict)
         pred_results = []
-        for (latent_name, zfile, mufile, logvarfile) in zipped:
+        for (latent_name, zfile, mufile, logvarfile) in tqdm(zipped):
             for lab_name in labels_set:
                 # Predict lab_name from z_latent_name
                 mus = np.loadtxt(mufile, delimiter=',')
@@ -132,10 +132,10 @@ def compute(args, model=None):
                 id2z = dict(zip(ids, zs))
                 # print(f"{latent_name} |-> {lab_name}")
                 # Precision, recall, f1
-                model, (p, r, f, _) = train_lr(latent_name, id2z,
+                model, p, r, f, acc = train_lr(latent_name, id2z,
                                                lab_name, id2labels,
                                                random_state=i)
-                pred_results.append([i, latent_name, lab_name, p, r, f])
+                pred_results.append([i, latent_name, lab_name, p, r, f, acc])
 
                 if lab_name not in Hvs.keys():
                     Hvs[lab_name] = compute_entropy_freq(Vs[lab_name])
@@ -151,7 +151,7 @@ def compute(args, model=None):
             writer = csv.writer(outF, delimiter=',')
             if i == 0:
                 writer.writerow(["sample_num", "latent_name", "label_name",
-                                 "precision", "recall", "F1"])
+                                 "precision", "recall", "F1", "accuracy"])
             for line in pred_results:
                 writer.writerow(line)
 
@@ -201,7 +201,9 @@ def train_lr(latent_name, id2z, label_name, id2labels, random_state=0):
                              class_weight="balanced",
                              penalty="none").fit(Z, V)
     preds = clf.predict(Z)
-    return clf, precision_recall_fscore_support(V, preds, average="macro")
+    p, r, f, _ = precision_recall_fscore_support(V, preds, average="macro")
+    acc = accuracy_score(V, preds)
+    return clf, p, r, f, acc
 
 
 def plot_z_v(Z, V, title=""):
@@ -506,7 +508,7 @@ def summarize_preds(preds_df):
         errs = df.groupby("label_name").std().drop(
             "sample_num", axis="columns")
         means.plot.bar(ax=axs[i], yerr=errs, ylim=(0.2, 1.0), rot=0,
-                       legend=i==0)
+                       legend=i==0)  # noqa
         axs[i].set_title(f"Latent: {latent_name}")
         i += 1
     plt.tight_layout()

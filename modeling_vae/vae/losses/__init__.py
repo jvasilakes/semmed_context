@@ -61,6 +61,7 @@ def compute_discriminator_losses(model, discriminator_logits, Ybatch):
     # Loss and accuracy for each discriminator
     idv_dsc_losses = dict()
     idv_dsc_accs = dict()
+    idv_dsc_f1s = dict()
     # total loss over all discriminators
     total_dsc_loss = torch.tensor(0.0).to(model.device)
     for (dsc_name, dsc_logits) in discriminator_logits.items():
@@ -68,12 +69,15 @@ def compute_discriminator_losses(model, discriminator_logits, Ybatch):
         targets = Ybatch[dsc_name].to(model.device)
         dsc_loss = dsc.compute_loss(dsc_logits, targets)
         dsc_acc = dsc.compute_accuracy(dsc_logits, targets)
+        dsc_f1 = dsc.compute_f1(dsc_logits, targets)
         idv_dsc_losses[dsc_name] = dsc_loss.item()
         idv_dsc_accs[dsc_name] = dsc_acc.item()
+        idv_dsc_f1s[dsc_name] = dsc_f1.item()
         total_dsc_loss += dsc_loss
     return {"total_dsc_loss": total_dsc_loss,
             "idv_dsc_losses": idv_dsc_losses,
-            "idv_dsc_accs": idv_dsc_accs}
+            "idv_dsc_accs": idv_dsc_accs,
+            "idv_dsc_f1s": idv_dsc_f1s}
 
 
 def compute_adversarial_losses(model, adversary_logits, Ybatch):
@@ -83,6 +87,7 @@ def compute_adversarial_losses(model, adversary_logits, Ybatch):
     idv_dsc_losses = dict()
     # Accuracies of the discriminators
     idv_dsc_accs = dict()
+    idv_dsc_f1s = dict()
     # total loss over all adversarial discriminators
     total_adv_loss = torch.tensor(0.0).to(model.device)
     for (adv_name, adv_logits) in adversary_logits.items():
@@ -96,11 +101,14 @@ def compute_adversarial_losses(model, adversary_logits, Ybatch):
         dsc_loss = adv.compute_discriminator_loss(adv_logits, targets)
         idv_dsc_losses[adv_name] = dsc_loss
         dsc_acc = adv.compute_accuracy(adv_logits, targets)
+        dsc_f1 = adv.compute_f1(adv_logits, targets)
         idv_dsc_accs[adv_name] = dsc_acc.item()
+        idv_dsc_f1s[adv_name] = dsc_f1.item()
     return {"total_adv_loss": total_adv_loss,
             "idv_adv_losses": idv_adv_losses,
             "idv_adv_dsc_losses": idv_dsc_losses,
-            "idv_adv_dsc_accs": idv_dsc_accs}
+            "idv_adv_dsc_accs": idv_dsc_accs,
+            "idv_adv_dsc_f1s": idv_dsc_f1s}
 
 
 def compute_mi_losses(model, latent_params, beta=1.0):
