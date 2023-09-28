@@ -1,0 +1,47 @@
+Experiment:
+  name: test_semrepfact_500_3
+  logdir: /home/jav/Documents/Projects/SemRepFact/modeling_vae/logs/
+  random_seed: 0
+Data:
+  datadir: /home/jav/Documents/Projects/SemRepFact/predications500k_2/tar/
+  dataset_name: semrep-fact
+  tasks_to_load: [Certainty, Polarity, Predicate]
+  num_examples: -1
+  encoder_type: lstm-triple-recon
+Model:
+  embedding_dim: 256
+  hidden_dim: 256
+  num_rnn_layers: 2
+  bow_encoder: false
+  bidirectional_encoder: true
+  encoder_dropout: 0.5
+  decoder_dropout: 0.5
+  # The dimensionality of each latent space, including the total.
+  # Will default to the number of labels if not specified.
+  latent_dims:
+    total: 64
+    entity: 8
+Training:
+  epochs: 1
+  batch_size: 16
+  learn_rate: 3e-4
+  teacher_forcing_prob: 0.0
+  # The weight of the KL term for each latent space.
+  lambdas:
+    default: 1.0
+    Certainty: 0.005
+    Polarity: 0.005
+    Predicate: 0.005
+    subject: 0.005
+    object: 0.005
+  # How to weight each class when computing the discriminator loss.
+  loss_weights:
+    Certainty: [1.0, 0.1]
+    Polarity: [1.0, 0.01]
+    Predicate: [0.16, 0.24, 0.73, 0.2, 0.16, 0.73, 0.73, 0.27, 0.73, 1.1, 1.1, 0.55, 0.1]
+  adversarial_loss: true
+  mi_loss: true
+Git:
+  branch: triple-recon
+  commit: 8cf0532
+  url: https://github.com/jvasilakes/semmed_context.git
