@@ -11,6 +11,7 @@ from collections import defaultdict
 
 # External packages
 import torch
+import torch.distributions as D
 import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
@@ -316,10 +317,13 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
             teacher_forcing_prob=params.Training.teacher_forcing_prob.value)
 
         for (l_name, l_params) in output_prime["latent_params"].items():
-            orig_z = output["latent_params"][l_name].z
-            z_prime = l_params.z
-            diff = torch.norm(z_prime - orig_z, p=None, dim=1).mean()
-            loss_logger.update({"idv_z_diff": {l_name: diff.item()}})
+            orig_mu = output["latent_params"][l_name].mu
+            orig_sd = output["latent_params"][l_name].logvar.exp()
+            mu_prime = l_params.mu
+            sd_prime = l_params.logvar.exp()
+            kl = D.kl_divergence(D.Normal(orig_mu, orig_sd),
+                                 D.Normal(mu_prime, sd_prime)).mean()
+            loss_logger.update({"idv_ae_kl": {l_name: kl.item()}})
 
         # Measure self-BLEU
         bleu = losses.compute_bleu(
