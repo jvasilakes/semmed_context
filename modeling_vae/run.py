@@ -223,7 +223,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
     if logdir is None:
         logdir = "logs"
 
-    loss_logger = LossLogger(summary_writer, epoch)
+    loss_logger = LossLogger(summary_writer, epoch, step=step)
     # Log example IDs in same order as latent parameters
     all_sent_ids = []
     all_latent_params = defaultdict(lambda: defaultdict(list))
