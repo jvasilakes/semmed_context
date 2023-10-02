@@ -312,7 +312,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         # Measure Autoencoding by reencoding the reconstructed output.
         x_prime = output["token_predictions"].to(model.device)
         output_prime = model(
-            x_prime, target_lengths,
+            x_prime, target_Xbatch, target_lengths,
             teacher_forcing_prob=params.Training.teacher_forcing_prob.value)
 
         for (l_name, l_params) in output_prime["latent_params"].items():
