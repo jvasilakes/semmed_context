@@ -326,7 +326,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
             target_Xbatch, x_prime, tokenizer)
         loss_logger.update({"bleu": bleu})
 
-        loss_logger.log_step(step)
+        loss_logger.log_step()
         if verbose is True:
             pbar.update(1)
             pbar.set_description(f"EPOCH: {epoch}")
