@@ -433,14 +433,16 @@ class VariationalSeq2Seq(nn.Module):
         cell = torch.stack(cell, dim=0)
         return (state, cell)
 
-    def forward(self, input_ids, lengths, teacher_forcing_prob=0.5):
+    def forward(self, input_ids, target_ids, target_lengths,
+                teacher_forcing_prob=0.5):
         # inputs: [batch_size, max(lengths)]
         batch_size = input_ids.size(0)
 
         if isinstance(self.encoder, BOWEncoder):
             context = self.encoder(input_ids)
         else:
-            encoded, context, encoder_hidden = self.encode(input_ids, lengths)
+            encoded, context, encoder_hidden = self.encode(
+                    input_ids, target_lengths)
 
         # params is a dict of {name: namedtuple(z, mu, logvar)} for each
         # discriminator/latent space
@@ -471,7 +473,7 @@ class VariationalSeq2Seq(nn.Module):
         decoder_input = decoder_input.repeat(batch_size, 1)
         input_lengths = [1] * batch_size
         vocab_size = self.decoder.vocab_size
-        target_length = lengths.max()
+        target_length = target_lengths.max()
         # Placeholder for predictions
         out_logits = torch.zeros(
                 batch_size, target_length, vocab_size).to(self.device)
@@ -486,7 +488,7 @@ class VariationalSeq2Seq(nn.Module):
             out_logits[:, i, :] = logits
             use_teacher_forcing = random.random() < teacher_forcing_prob
             if use_teacher_forcing is True:
-                target = input_ids[:, i]
+                target = target_ids[:, i]
                 decoder_input = torch.unsqueeze(target, 1)
             else:
                 probs = torch.softmax(logits, dim=-1)

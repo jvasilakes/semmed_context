@@ -198,15 +198,16 @@ def get_reconstructions(model, examples, tokenizer):
     batch = min_pad_collate(examples)
     inX = send_to_device(batch["json"]["encoded"], model.device)
     if "target_encoded" in batch["json"].keys():
+        target_ids = batch["json"]["target_encoded"]["input_ids"].to(model.device)  # noqa
         target_text = tokenizer.batch_decode(
-            batch["json"]["target_encoded"]["input_ids"],
-            skip_special_tokens=True)
-        lengths = batch["json"]["target_encoded"]["lengths"]
+                target_ids, skip_special_tokens=True)
+        target_lengths = batch["json"]["target_encoded"]["lengths"]
     else:
         target_text = tokenizer.batch_decode(inX["input_ids"],
                                              skip_special_tokens=True)
-        lengths = inX["lengths"]
-    output = model(inX["input_ids"], lengths, teacher_forcing_prob=0.0)
+        target_lengths = inX["lengths"]
+    output = model(inX["input_ids"], target_ids, target_lengths,
+                   teacher_forcing_prob=0.0)
     recon_text = tokenizer.batch_decode(output["token_predictions"],
                                         skip_special_tokens=True)
     return [{"target": target_text[i], "reconstruction": recon_text[i]}

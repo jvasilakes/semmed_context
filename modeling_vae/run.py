@@ -11,6 +11,7 @@ from collections import defaultdict
 
 # External packages
 import torch
+import torch.distributions as D
 import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
@@ -59,10 +60,11 @@ def parse_args():
 
 class LossLogger(object):
 
-    def __init__(self, summary_writer, epoch):
+    def __init__(self, summary_writer, epoch, step=0):
         self.losses = {}
         self.summary_writer = summary_writer
         self.epoch = epoch
+        self.step = step
 
     def __repr__(self):
         return str(self.losses)
@@ -111,9 +113,10 @@ class LossLogger(object):
         self._log(i=self.epoch, subdict=subdict, base_keystr=base_keystr,
                   collapse_fn=np.mean)
 
-    def log_step(self, step, subdict=None, base_keystr="step"):
-        self._log(i=step, subdict=subdict, base_keystr=base_keystr,
+    def log_step(self, subdict=None, base_keystr="step"):
+        self._log(i=self.step, subdict=subdict, base_keystr=base_keystr,
                   collapse_fn=list.__getitem__, collapse_fn_args=[-1])
+        self.step += 1
 
     def summarize(self, key):
         val = self.losses[key]
@@ -212,7 +215,7 @@ def log_params(params_dict, example_ids, logdir, dataset_name, epoch):
 
 
 def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
-              verbose=True, summary_writer=None, logdir=None):
+              step=0, verbose=True, summary_writer=None, logdir=None):
 
     epoch_start = time.time()
 
@@ -221,7 +224,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
     if logdir is None:
         logdir = "logs"
 
-    loss_logger = LossLogger(summary_writer, epoch)
+    loss_logger = LossLogger(summary_writer, epoch, step=step)
     # Log example IDs in same order as latent parameters
     all_sent_ids = []
     all_latent_params = defaultdict(lambda: defaultdict(list))
@@ -232,15 +235,14 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
             pbar = tqdm(total=len(dataloader))
         except TypeError:  # WebLoader has no __len__
             pbar = tqdm(dataloader)
-    step = 0
     for (i, batch) in enumerate(dataloader):
         in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
         if "target_encoded" in batch["json"].keys():
             target_Xbatch = batch["json"]["target_encoded"]["input_ids"].to(model.device)  # noqa
-            lengths = batch["json"]["target_encoded"]["lengths"].to(model.device)  # noqa
+            target_lengths = batch["json"]["target_encoded"]["lengths"].to(model.device)  # noqa
         else:
             target_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)  # noqa
-            lengths = batch["json"]["encoded"]["lengths"].to(model.device)
+            target_lengths = batch["json"]["encoded"]["lengths"].to(model.device)  # noqa
         Ybatch = {}
         for (task, val) in batch["json"]["labels"].items():
             Ybatch[task] = val.to(model.device)
@@ -252,7 +254,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         #           "adv_logits": {latent_name-label_name: [batch_size, n_classes]}  # noqa
         #           "token_predictions": [batch_size, target_length]
         output = model(
-            in_Xbatch, lengths,
+            in_Xbatch, target_Xbatch, target_lengths,
             teacher_forcing_prob=params.Training.teacher_forcing_prob.value)
 
         kl_weights_dict = {}
@@ -268,7 +270,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         # COMPUTE MANY MANY LOSSES
         total_loss, losses_dict = compute_all_losses(
             model, output, target_Xbatch, Ybatch,
-            lengths, kl_weights_dict, mi_loss_weight)
+            target_lengths, kl_weights_dict, mi_loss_weight)
         loss_logger.update({"total_loss": total_loss})
         loss_logger.update(losses_dict)
 
@@ -311,21 +313,24 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
         # Measure Autoencoding by reencoding the reconstructed output.
         x_prime = output["token_predictions"].to(model.device)
         output_prime = model(
-            x_prime, lengths,
+            x_prime, target_Xbatch, target_lengths,
             teacher_forcing_prob=params.Training.teacher_forcing_prob.value)
 
         for (l_name, l_params) in output_prime["latent_params"].items():
-            orig_z = output["latent_params"][l_name].z
-            z_prime = l_params.z
-            diff = torch.norm(z_prime - orig_z, p=None, dim=1).mean()
-            loss_logger.update({"idv_ae": {l_name: diff.item()}})
+            orig_mu = output["latent_params"][l_name].mu
+            orig_sd = output["latent_params"][l_name].logvar.exp()
+            mu_prime = l_params.mu
+            sd_prime = l_params.logvar.exp()
+            kl = D.kl_divergence(D.Normal(orig_mu, orig_sd),
+                                 D.Normal(mu_prime, sd_prime)).mean()
+            loss_logger.update({"idv_ae_kl": {l_name: kl.item()}})
 
         # Measure self-BLEU
         bleu = losses.compute_bleu(
             target_Xbatch, x_prime, tokenizer)
         loss_logger.update({"bleu": bleu})
 
-        loss_logger.log_step(step)
+        loss_logger.log_step()
         if verbose is True:
             pbar.update(1)
             pbar.set_description(f"EPOCH: {epoch}")
@@ -359,7 +364,7 @@ def trainstep(model, optimizer, dataloader, params, epoch, tokenizer,
     logstr += f" | Epoch time: {difftime_str}"
     logging.info(logstr)
 
-    return model, optimizer
+    return model, optimizer, step
 
 
 def evalstep(model, dataloader, params, epoch, tokenizer, name="val",
@@ -385,16 +390,17 @@ def evalstep(model, dataloader, params, epoch, tokenizer, name="val",
         in_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)
         if "target_encoded" in batch["json"].keys():
             target_Xbatch = batch["json"]["target_encoded"]["input_ids"].to(model.device)  # noqa
-            lengths = batch["json"]["target_encoded"]["lengths"].to(model.device)  # noqa
+            target_lengths = batch["json"]["target_encoded"]["lengths"].to(model.device)  # noqa
         else:
             target_Xbatch = batch["json"]["encoded"]["input_ids"].to(model.device)  # noqa
-            lengths = batch["json"]["encoded"]["lengths"].to(model.device)  # noqa
+            target_lengths = batch["json"]["encoded"]["lengths"].to(model.device)  # noqa
         Ybatch = {}
         for (task, val) in batch["json"]["labels"].items():
             Ybatch[task] = val.to(model.device)
         batch_ids = batch["__key__"]
 
-        output = model(in_Xbatch, lengths, teacher_forcing_prob=0.0)
+        output = model(in_Xbatch, target_Xbatch, target_lengths,
+                       teacher_forcing_prob=0.0)
 
         kl_weights_dict = {}
         lambdas = params.Training.lambdas.value
@@ -407,7 +413,7 @@ def evalstep(model, dataloader, params, epoch, tokenizer, name="val",
 
         mi_loss_weight = 1.0
         total_loss, losses_dict = compute_all_losses(
-            model, output, target_Xbatch, Ybatch, lengths,
+            model, output, target_Xbatch, Ybatch, target_lengths,
             kl_weights_dict, mi_loss_weight)
         loss_logger.update({"total_loss": total_loss})
         loss_logger.update(losses_dict)
@@ -543,11 +549,12 @@ def run(args):
 
         epoch_range = range(
             start_epoch, start_epoch + params.Training.epochs.value)
+        step = 0
         for epoch in epoch_range:
             try:
-                vae, optimizer = trainstep(
+                vae, optimizer, step = trainstep(
                     vae, optimizer, train_dataloader, params, epoch,
-                    dm.tokenizer, verbose=not args.quiet,
+                    dm.tokenizer, step=step, verbose=not args.quiet,
                     summary_writer=train_writer, logdir=logdir)
                 # Log train inputs and their reconstructions
                 utils.log_reconstructions(vae, train_data_to_log,
