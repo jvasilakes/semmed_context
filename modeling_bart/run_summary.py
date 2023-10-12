@@ -84,7 +84,8 @@ def run_train(config, quiet=False):
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
-    model = MODEL_REGISTRY[config.Model.model_name.value].from_config(config)
+    model = MODEL_REGISTRY[config.Model.model_name.value].from_config(
+        config, tasks_spec=datamodule.label_spec, logdir=version_dir)
     model.train()
 
     logger = TensorBoardLogger(
@@ -92,7 +93,7 @@ def run_train(config, quiet=False):
 
     filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
-        monitor="val_loss", mode="min", filename=filename_fmt)
+        monitor="val_total_loss", mode="min", filename=filename_fmt)
 
     if torch.cuda.is_available():
         available_gpus = min(1, torch.cuda.device_count())

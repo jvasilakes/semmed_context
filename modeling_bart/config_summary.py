@@ -73,6 +73,14 @@ def bart_model_name_or_path(val):
     pass
 
 
+@config.parameter(group="Model", default={"total": 128}, types=dict)
+def latent_structure(val):
+    for (name, dims) in val.items():
+        assert isinstance(name, str)
+        assert isinstance(dims, int)
+        assert dims > 0
+
+
 @config.parameter(group="Training", default=1, types=int)
 def epochs(val):
     assert val > 0

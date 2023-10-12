@@ -1,0 +1,300 @@
+from typing import List, Tuple, Optional, Union, Dict
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.distributions as D
+
+from transformers.models.bart.modeling_bart import (
+    BartConfig, BartPretrainedModel, BartEncoder, BartDecoder,
+    BartForConditionalGeneration, shift_tokens_right)
+from transformers.modeling_outputs import BaseModelOutput
+
+from .util import Seq2SeqVAEModelOutput, Seq2SeqVAELMOutput
+from .cross_attention import CrossAttention
+
+
+def kl_divergence(mu, logvar):
+    kl = 0.5 * (torch.exp(logvar) + torch.pow(mu, 2) - 1 - logvar)
+    kl = kl.mean(0).sum()
+    return kl
+
+
+class BartVAEModel(BartPretrainedModel):
+    """
+    Basically BART-CVAE from
+
+    DiscoDVT: Generating Long Text with Discourse-Aware
+        Discrete Variational Transformer
+    Ji and Huang 2021
+    http://arxiv.org/abs/2110.05999
+    """
+    _tied_weights_keys = ["encoder.embed_tokens.weight",
+                          "decoder.embed_tokens.weight"]
+
+    def __init__(self, config: BartConfig, latent_structure: dict,
+                 tasks_spec: dict = None):
+        super().__init__(config)
+        self.latent_structure = latent_structure
+        self.tasks_spec = tasks_spec or {}
+
+        padding_idx, vocab_size = config.pad_token_id, config.vocab_size
+        self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
+
+        self.encoder = BartEncoder(config, self.shared)
+        self.decoder = BartDecoder(config, self.shared)
+
+        hidden_size = config.hidden_size
+        self.context2params = nn.ModuleDict()
+        self.z_projectors = nn.ModuleDict()
+        self.discriminators = nn.ModuleDict()
+        total_latent_dim = 0
+        latent_proj_dim = 128
+        for (latent_name, latent_dim) in self.latent_structure.items():
+            self.context2params[latent_name] = nn.Linear(
+                    # 2 for mu, logvar
+                    hidden_size, 2 * latent_dim)
+            self.z_projectors[latent_name] = nn.Linear(
+                latent_dim, latent_proj_dim)
+            total_latent_dim += latent_dim
+            if latent_name in self.tasks_spec.keys():
+                self.discriminators[latent_name] = nn.Linear(
+                    latent_dim, self.tasks_spec[latent_name])
+        self.latent_cross_attn = CrossAttention(
+            dim=hidden_size, heads=1, dim_head=64,
+            context_dim=latent_proj_dim, sparse=False)
+
+    def get_input_embeddings(self):
+        return self.shared
+
+    def set_input_embeddings(self, value):
+        self.shared = value
+        self.encoder.embed_tokens = self.shared
+        self.decoder.embed_tokens = self.shared
+
+    def get_encoder(self):
+        return self.encoder
+
+    def get_decoder(self):
+        return self.decoder
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.Tensor] = None,
+        decoder_head_mask: Optional[torch.Tensor] = None,
+        encoder_outputs: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, Seq2SeqVAEModelOutput]:
+        # different to other models, Bart automatically creates
+        # decoder_input_ids from input_ids if no decoder_input_ids are provided
+        if decoder_input_ids is None and decoder_inputs_embeds is None:
+            if input_ids is None:
+                raise ValueError(
+                    "If no `decoder_input_ids` or `decoder_inputs_embeds` are "
+                    "passed, `input_ids` cannot be `None`. Please pass either "
+                    "`input_ids` or `decoder_input_ids` or `decoder_inputs_embeds`."  # noqa
+                )
+
+            decoder_input_ids = shift_tokens_right(
+                input_ids, self.config.pad_token_id,
+                self.config.decoder_start_token_id
+            )
+
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions  # noqa
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states  # noqa
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache  # noqa
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict  # noqa
+
+        if encoder_outputs is None:
+            encoder_outputs = self.encoder(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        # If the user passed a tuple for encoder_outputs,
+        # we wrap it in a BaseModelOutput when return_dict=True
+        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
+            encoder_outputs = BaseModelOutput(
+                last_hidden_state=encoder_outputs[0],
+                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,  # noqa
+                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,  # noqa
+            )
+
+        hidden_states = encoder_outputs.last_hidden_state
+        eos_mask = input_ids.eq(self.config.eos_token_id).to(hidden_states.device)  # noqa
+        if len(torch.unique_consecutive(eos_mask.sum(1))) > 1:
+            raise ValueError("All examples must have the same number of <eos> tokens.")  # noqa
+        sentence_representation = hidden_states[eos_mask, :].view(
+            hidden_states.size(0), -1, hidden_states.size(-1))[:, -1, :]
+
+        latent_params = self.compute_latent_params(sentence_representation)
+        zs = []
+        latents_projected = []
+        task_logits = {}
+        for latent_name in sorted(latent_params.keys()):
+            z = latent_params[latent_name].rsample()
+            zs.append(z)
+            if latent_name in self.discriminators.keys():
+                task_logits[latent_name] = self.discriminators[latent_name](z)
+            latents_projected.append(self.z_projectors[latent_name](z))
+        latents_matrix = torch.stack(latents_projected, dim=1)
+        decoder_init, _, token_latent_attentions, _ = self.latent_cross_attn(
+            hidden_states, latents_matrix, return_attn=True)
+        # Skip connection
+        decoder_init = hidden_states + decoder_init
+
+        # decoder outputs consists of
+        # (dec_features, past_key_value, dec_hidden, dec_attn)
+        decoder_outputs = self.decoder(
+            input_ids=decoder_input_ids,
+            attention_mask=decoder_attention_mask,
+            encoder_hidden_states=decoder_init,
+            encoder_attention_mask=attention_mask,
+            head_mask=decoder_head_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=decoder_inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        return Seq2SeqVAEModelOutput(
+            last_hidden_state=decoder_outputs.last_hidden_state,
+            latent_params=latent_params,
+            task_logits=task_logits,
+            past_key_values=decoder_outputs.past_key_values,
+            decoder_hidden_states=decoder_outputs.hidden_states,
+            decoder_attentions=decoder_outputs.attentions,
+            cross_attentions=decoder_outputs.cross_attentions,
+            encoder_last_hidden_state=encoder_outputs.last_hidden_state,
+            encoder_hidden_states=encoder_outputs.hidden_states,
+            encoder_attentions=encoder_outputs.attentions,
+        )
+
+    def compute_latent_params(self, context):
+        latent_dists = {}
+        for (name, layer) in self.context2params.items():
+            params = layer(context)
+            mu, logvar = params.chunk(2, dim=-1)
+            dist = D.Normal(mu, torch.exp(logvar))
+            latent_dists[name] = dist
+        return latent_dists
+
+
+class BartVAEForConditionalGeneration(BartForConditionalGeneration):
+
+    def __init__(self, config: BartConfig, latent_structure, tasks_spec):
+        super().__init__(config)
+        self.model = BartVAEModel(config, latent_structure, tasks_spec)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.LongTensor] = None,
+        head_mask: Optional[torch.Tensor] = None,
+        decoder_head_mask: Optional[torch.Tensor] = None,
+        encoder_outputs: Optional[List[torch.FloatTensor]] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        decoder_inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        task_labels: Optional[Dict[str, torch.LongTensor]] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, Seq2SeqVAELMOutput]:
+
+        if return_dict is None:
+            return_dict = self.config.use_return_dict
+
+        if labels is not None:
+            use_cache = False
+            if decoder_input_ids is None and decoder_inputs_embeds is None:
+                decoder_input_ids = shift_tokens_right(
+                    labels, self.config.pad_token_id,
+                    self.config.decoder_start_token_id
+                )
+
+        outputs = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            decoder_input_ids=decoder_input_ids,
+            encoder_outputs=encoder_outputs,
+            decoder_attention_mask=decoder_attention_mask,
+            head_mask=head_mask,
+            decoder_head_mask=decoder_head_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            decoder_inputs_embeds=decoder_inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        lm_logits = self.lm_head(outputs[0])
+        lm_logits = lm_logits + self.final_logits_bias.to(lm_logits.device)
+
+        masked_lm_loss = None
+        if labels is not None:
+            labels = labels.to(lm_logits.device)
+            loss_fct = nn.CrossEntropyLoss()
+            masked_lm_loss = loss_fct(
+                lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+
+        if not return_dict:
+            output = (lm_logits,) + outputs[1:]
+            rval = output
+            if masked_lm_loss is not None:
+                rval = ((masked_lm_loss,) + output)
+            return rval
+
+        kls = {latent_name: D.kl_divergence(dist, D.Normal(0, 1)).mean(0).sum()
+               for (latent_name, dist) in outputs.latent_params.items()}
+
+        task_losses = {}
+        if task_labels is not None:
+            for (task, logits) in outputs.task_logits.items():
+                if task in task_labels:
+                    if logits.dim() == 1:
+                        task_losses[task] = F.binary_cross_entropy_with_logits(
+                            logits, task_labels[task])
+                    else:
+                        task_losses[task] = F.cross_entropy(
+                            logits, task_labels[task])
+
+        return Seq2SeqVAELMOutput(
+            loss=masked_lm_loss,
+            logits=lm_logits,
+            kls=kls,
+            latent_params=outputs.latent_params,
+            task_logits=outputs.task_logits,
+            task_losses=task_losses,
+            past_key_values=outputs.past_key_values,
+            decoder_hidden_states=outputs.decoder_hidden_states,
+            decoder_attentions=outputs.decoder_attentions,
+            cross_attentions=outputs.cross_attentions,
+            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+            encoder_hidden_states=outputs.encoder_hidden_states,
+            encoder_attentions=outputs.encoder_attentions,
+        )

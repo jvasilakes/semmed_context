@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 import torch
 from dataclasses import dataclass
@@ -47,10 +47,40 @@ def register_loss(name):
 
 @dataclass
 class SequenceClassifierOutputWithTokenMask(ModelOutput):
-
     logits: torch.FloatTensor = None
     loss: Optional[torch.FloatTensor] = None
     mask_loss: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
     mask: Optional[torch.FloatTensor] = None
+
+
+@dataclass
+class Seq2SeqVAEModelOutput(ModelOutput):
+    last_hidden_state: torch.FloatTensor = None
+    latent_params: Dict = None
+    task_logits: Dict[str, torch.FloatTensor] = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    decoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    decoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    cross_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    encoder_last_hidden_state: Optional[torch.FloatTensor] = None
+    encoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+
+@dataclass
+class Seq2SeqVAELMOutput(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    kls: Dict[str, torch.FloatTensor] = None
+    latent_params: Dict = None
+    task_logits: Dict[str, torch.FloatTensor] = None
+    task_losses: Dict[str, torch.FloatTensor] = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    decoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    decoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    cross_attentions: Optional[Tuple[torch.FloatTensor]] = None
+    encoder_last_hidden_state: Optional[torch.FloatTensor] = None
+    encoder_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    encoder_attentions: Optional[Tuple[torch.FloatTensor]] = None
