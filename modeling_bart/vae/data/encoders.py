@@ -24,12 +24,15 @@ class Encoder(object):
     @classmethod
     def from_config(cls, config):
         return cls(config.Data.Encoder.bart_model_name_or_path.value,
-                   config.Data.Encoder.max_seq_length.value)
+                   config.Data.Encoder.max_seq_length.value,
+                   target=config.Data.Encoder.target.value)
 
     def __init__(self, bart_model_name_or_path="facebook/bart-large",
-                 max_seq_length=256, cache=True):
+                 max_seq_length=256, target="reconstruction", cache=True):
         self.bart_model_name_or_path = bart_model_name_or_path
         self.max_seq_length = max_seq_length
+        assert target in ["reconstruction", "predication"]
+        self.target = target
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.bart_model_name_or_path)
         # Whether to cache encoded examples
@@ -91,6 +94,24 @@ class DefaultEncoder(Encoder):
         all_idxs = subj_idxs + obj_idxs
         data["encoded"] = {k: torch.as_tensor(v)
                            for (k, v) in encoded.items()}
+
+        if self.target == "predication":
+            target_predicate = self.get_predicate_text(data)
+            target_encoded = self.tokenizer(
+                target_predicate, max_length=20,
+                padding="max_length", truncation=True,
+                return_token_type_ids=False,
+                return_attention_mask=False)
+            data["encoded"]["labels"] = torch.as_tensor(
+                target_encoded["input_ids"])
+        else:
+            data["encoded"]["labels"] = data["encoded"]["input_ids"]
+
+        # 2 is the decoder_start_token_id for BART
+        data["encoded"]["decoder_input_ids"] = shift_tokens_right(
+            data["encoded"]["labels"].unsqueeze(0),
+            self.tokenizer.pad_token_id, 2).squeeze()
+
         data["subject_idxs"] = torch.as_tensor(all_idxs[:2])
         data["object_idxs"] = torch.as_tensor(all_idxs[2:])
         # Just keep the text, we don't need the character offsets anymore.
@@ -98,9 +119,40 @@ class DefaultEncoder(Encoder):
         data["object"] = data["object"][0]
         return example
 
+    def get_predicate_text(self, data):
+        subj = data["subject"][0]
+        obj = data["object"][0]
+
+        use_infinitive_verb = False
+        unc_val = data["labels"]["Certainty"]
+        unc_text = None
+        if unc_val == "Uncertain":
+            use_infinitive_verb = True
+            unc_text = "might"
+        pol_val = data["labels"]["Polarity"]
+        pol_text = None
+        if pol_val == "Negative":
+            use_infinitive_verb = True
+            pol_text = "not"
+            if unc_val == "Certain":
+                pol_text = "does not"
+
+        pred_tokens = data["labels"]["Predicate"].split('_')
+        if use_infinitive_verb is True:
+            pred_tokens[0] = pred_tokens[0].rstrip('S')
+        if pred_tokens[0].endswith("ED"):
+            pred_tokens[0] = pred_tokens[0].rstrip('D')
+            if use_infinitive_verb is False:
+                pred_tokens[0] = pred_tokens[0] + 'S'
+        pred = ' '.join(pred_tokens)
+
+        txts = [subj, unc_text, pol_text, pred, obj]
+        pred_text = ' '.join([txt for txt in txts if txt is not None])
+        return pred_text.lower()
+
 
 @register_encoder("solid-marker")
-class SolidMarkerEncoder(Encoder):
+class SolidMarkerEncoder(DefaultEncoder):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -108,6 +160,16 @@ class SolidMarkerEncoder(Encoder):
                                    "subj_end_token": 45946,   # "=$",
                                    "obj_start_token": 1039,   # "@",
                                    "obj_end_token": 49436}    # "@#"
+
+        #self.special_tokens = {"subj_start_token": "<subj>",
+        #                       "subj_end_token": "</subj>",
+        #                       "obj_start_token": "<obj>",
+        #                       "obj_end_token": "</obj>"}
+        #self.tokenizer.add_special_tokens(
+        #    {"additional_special_tokens": list(self.special_tokens.values())})
+        #self.special_tokens_map = {
+        #    role: self.tokenizer.vocab[token]
+        #    for (role, token) in self.special_tokens.items()}
 
     def encode_single_example(self, example):
         data = example["json"]
@@ -149,13 +211,18 @@ class SolidMarkerEncoder(Encoder):
                           for (key, t) in packed_encoded.items()}
         data["encoded"] = packed_encoded
 
-        target_predicate = self.get_predicate_text(data)
-        target_encoded = self.tokenizer(
-            target_predicate, max_length=20,
-            padding="max_length", truncation=True, return_token_type_ids=False,
-            return_attention_mask=False)
-        data["encoded"]["labels"] = torch.as_tensor(
-            target_encoded["input_ids"])
+        if self.target == "predication":
+            target_predicate = self.get_predicate_text(data)
+            target_encoded = self.tokenizer(
+                target_predicate, max_length=20,
+                padding="max_length", truncation=True,
+                return_token_type_ids=False,
+                return_attention_mask=False)
+            data["encoded"]["labels"] = torch.as_tensor(
+                target_encoded["input_ids"])
+        else:
+            data["encoded"]["labels"] = data["encoded"]["input_ids"]
+
         # 2 is the decoder_start_token_id for BART
         data["encoded"]["decoder_input_ids"] = shift_tokens_right(
             data["encoded"]["labels"].unsqueeze(0),
@@ -231,37 +298,6 @@ class SolidMarkerEncoder(Encoder):
             truncation=True, add_special_tokens=False,
             return_tensors="pt")
         return new_encodings, all_new_entity_idxs
-
-    def get_predicate_text(self, data):
-        subj = data["subject"][0]
-        obj = data["object"][0]
-
-        use_infinitive_verb = False
-        unc_val = data["labels"]["Certainty"]
-        unc_text = None
-        if unc_val == "Uncertain":
-            use_infinitive_verb = True
-            unc_text = "might"
-        pol_val = data["labels"]["Polarity"]
-        pol_text = None
-        if pol_val == "Negative":
-            use_infinitive_verb = True
-            pol_text = "not"
-            if unc_val == "Certain":
-                pol_text = "does not"
-
-        pred_tokens = data["labels"]["Predicate"].split('_')
-        if use_infinitive_verb is True:
-            pred_tokens[0] = pred_tokens[0].rstrip('S')
-        if pred_tokens[0].endswith("ED"):
-            pred_tokens[0] = pred_tokens[0].rstrip('D')
-            if use_infinitive_verb is False:
-                pred_tokens[0] = pred_tokens[0] + 'S'
-        pred = ' '.join(pred_tokens)
-
-        txts = [subj, unc_text, pol_text, pred, obj]
-        pred_text = ' '.join([txt for txt in txts if txt is not None])
-        return pred_text.lower()
 
 
 if __name__ == "__main__":

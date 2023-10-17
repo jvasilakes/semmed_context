@@ -43,6 +43,16 @@ def tasks_to_load(val):
     pass
 
 
+@config.parameter(group="Data", default={}, types=dict)
+def label_weights(val):
+    """
+    How to weight each label when computing the task losses.
+    """
+    for (task, weights) in val.items():
+        assert isinstance(task, str)
+        assert isinstance(weights, list)
+
+
 @config.parameter(group="Data", default=-1, types=int)
 def num_examples(val):
     assert val == -1 or val > 0
@@ -51,6 +61,11 @@ def num_examples(val):
 @config.parameter(group="Data.Encoder", default="default", types=str)
 def encoder_type(val):
     pass
+
+
+@config.parameter(group="Data.Encoder", default="reconstruction", types=str)
+def target(val):
+    assert val in ["reconstruction", "predication"]
 
 
 @config.parameter(group="Data.Encoder", default="facebook/bart-base", types=str)  # noqa

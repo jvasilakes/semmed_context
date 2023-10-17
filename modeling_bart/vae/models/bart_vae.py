@@ -33,10 +33,11 @@ class BartVAEModel(BartPretrainedModel):
                           "decoder.embed_tokens.weight"]
 
     def __init__(self, config: BartConfig, latent_structure: dict,
-                 tasks_spec: dict = None):
+                 tasks_spec: dict = None, special_tokens_map: dict = None):
         super().__init__(config)
         self.latent_structure = latent_structure
         self.tasks_spec = tasks_spec or {}
+        self.special_tokens_map = special_tokens_map or {}
 
         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
         self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
@@ -50,19 +51,22 @@ class BartVAEModel(BartPretrainedModel):
         self.discriminators = nn.ModuleDict()
         total_latent_dim = 0
         latent_proj_dim = 128
+        attn_head_dim = 64
         for (latent_name, latent_dim) in self.latent_structure.items():
             self.context2params[latent_name] = nn.Linear(
                     # 2 for mu, logvar
-                    hidden_size, 2 * latent_dim)
+                    attn_head_dim, 2 * latent_dim)
             self.z_projectors[latent_name] = nn.Linear(
                 latent_dim, latent_proj_dim)
             total_latent_dim += latent_dim
             if latent_name in self.tasks_spec.keys():
                 self.discriminators[latent_name] = nn.Linear(
                     latent_dim, self.tasks_spec[latent_name])
+        num_latents = len(self.latent_structure)
         self.latent_cross_attn = CrossAttention(
-            dim=hidden_size, heads=1, dim_head=64,
-            context_dim=latent_proj_dim, sparse=False)
+            dim=hidden_size, heads=num_latents, dim_head=attn_head_dim,
+            context_dim=hidden_size, sparse=False)
+        self.layernorm = nn.LayerNorm(hidden_size)
 
     def get_input_embeddings(self):
         return self.shared
@@ -137,27 +141,35 @@ class BartVAEModel(BartPretrainedModel):
             )
 
         hidden_states = encoder_outputs.last_hidden_state
+        # TODO: get sentence representation from solid markers using the same
+        # masking logic.
+        #if len(self.special_tokens_map) > 0:
+        #    mask_token_ids = self.special_tokens_map.values()
+        #else:
+        #    mask_token_ids = self.config.eos_token_id
+        #sentence_representation = self._mask_and_pool_hidden(
+        #    hidden_states, mask_token_ids)
+
         eos_mask = input_ids.eq(self.config.eos_token_id).to(hidden_states.device)  # noqa
         if len(torch.unique_consecutive(eos_mask.sum(1))) > 1:
             raise ValueError("All examples must have the same number of <eos> tokens.")  # noqa
         sentence_representation = hidden_states[eos_mask, :].view(
             hidden_states.size(0), -1, hidden_states.size(-1))[:, -1, :]
 
-        latent_params = self.compute_latent_params(sentence_representation)
+        sent_out, hidden_out, sent_attn, hidden_attn, sent_by_head, hidden_by_head = self.latent_cross_attn(  # noqa
+            sentence_representation.unsqueeze(1),
+            hidden_states, return_attn=True, return_head_output=True)
+
+        latent_params = self.compute_latent_params(sent_by_head.squeeze(2))
         zs = []
-        latents_projected = []
         task_logits = {}
         for latent_name in sorted(latent_params.keys()):
             z = latent_params[latent_name].rsample()
             zs.append(z)
             if latent_name in self.discriminators.keys():
                 task_logits[latent_name] = self.discriminators[latent_name](z)
-            latents_projected.append(self.z_projectors[latent_name](z))
-        latents_matrix = torch.stack(latents_projected, dim=1)
-        decoder_init, _, token_latent_attentions, _ = self.latent_cross_attn(
-            hidden_states, latents_matrix, return_attn=True)
-        # Skip connection
-        decoder_init = hidden_states + decoder_init
+        # Skip connection + layer normalization
+        decoder_init = self.layernorm(hidden_states + hidden_out)
 
         # decoder outputs consists of
         # (dec_features, past_key_value, dec_hidden, dec_attn)
@@ -188,7 +200,18 @@ class BartVAEModel(BartPretrainedModel):
             encoder_attentions=encoder_outputs.attentions,
         )
 
-    def compute_latent_params(self, context):
+    def compute_latent_params(self, context_per_latent):
+        latent_dists = {}
+        for (i, name) in enumerate(sorted(self.context2params.keys())):
+            layer = self.context2params[name]
+            context = context_per_latent[:, i]
+            params = layer(context)
+            mu, logvar = params.chunk(2, dim=-1)
+            dist = D.Normal(mu, torch.exp(logvar))
+            latent_dists[name] = dist
+        return latent_dists
+
+    def old_compute_latent_params(self, context):
         latent_dists = {}
         for (name, layer) in self.context2params.items():
             params = layer(context)
@@ -197,12 +220,27 @@ class BartVAEModel(BartPretrainedModel):
             latent_dists[name] = dist
         return latent_dists
 
+    def _mask_and_pool_hidden(self, input_ids, hidden_states, mask_token_ids):
+        mask = torch.zeros_like(input_ids).bool()
+        for mask_id in mask_token_ids:
+            mask = torch.logical_or(mask, input_ids.eq(mask_id))
+        if len(torch.unique_consecutive(mask.sum(1))) > 1:
+            raise ValueError("All examples must have the same number of special tokens.")  # noqa
+        token_reps = hidden_states[mask, :].view(
+            hidden_states.size(0), -1, hidden_states.size(-1))
+        sentence_representation = token_reps.max(1).values
+        return sentence_representation
+
 
 class BartVAEForConditionalGeneration(BartForConditionalGeneration):
 
-    def __init__(self, config: BartConfig, latent_structure, tasks_spec):
+    def __init__(self, config: BartConfig, latent_structure,
+                 tasks_spec, label_weights=None):
         super().__init__(config)
         self.model = BartVAEModel(config, latent_structure, tasks_spec)
+        self.label_weights = label_weights or {}
+        self.label_weights = {task: torch.as_tensor(ws)
+                              for (task, ws) in self.label_weights.items()}
 
     def forward(
         self,
@@ -276,12 +314,21 @@ class BartVAEForConditionalGeneration(BartForConditionalGeneration):
         if task_labels is not None:
             for (task, logits) in outputs.task_logits.items():
                 if task in task_labels:
+                    try:
+                        weights = self.label_weights[task].to(self.device)
+                    except KeyError:
+                        weights = None
                     if logits.dim() == 1:
+                        if weights is not None:
+                            assert len(weights) == 2
+                            pos_weight = weights[1]
+                        else:
+                            pos_weight = None
                         task_losses[task] = F.binary_cross_entropy_with_logits(
-                            logits, task_labels[task])
+                            logits, task_labels[task], pos_weight=pos_weight)
                     else:
                         task_losses[task] = F.cross_entropy(
-                            logits, task_labels[task])
+                            logits, task_labels[task], weight=weights)
 
         return Seq2SeqVAELMOutput(
             loss=masked_lm_loss,

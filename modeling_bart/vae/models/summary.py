@@ -14,7 +14,7 @@ from .util import register_model
 from .bart_vae import BartVAEForConditionalGeneration
 
 
-# Ignore warning that BertModel is not using some parameters.
+# Ignore warning that BartModel is not using some parameters.
 transformers_logging.set_verbosity_error()
 
 
@@ -74,7 +74,6 @@ class AbstractBartSummaryModel(pl.LightningModule):
         for batch in metrics:
             loss_vals.append(batch["loss"].detach().cpu().numpy())
             for (latent, params) in batch["latent_params"].items():
-                #epoch_zs[latent].extend(params.z.detach().cpu().tolist())
                 epoch_zs[latent].extend(
                     params.rsample().detach().cpu().tolist())
             for (task, logits) in batch["task_logits"].items():
@@ -187,15 +186,17 @@ class BartVAESummaryModel(AbstractBartSummaryModel):
         return cls(config.Model.bart_model_name_or_path.value,
                    latent_structure=config.Model.latent_structure.value,
                    tasks_spec=tasks_spec,
+                   label_weights=config.Data.label_weights.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
                    logdir=logdir)
 
     def __init__(self, bart_model_name_or_path, latent_structure,
-                 tasks_spec=None, lr=2e-5, weight_decay=0.0, logdir=None):
+                 tasks_spec=None, label_weights=None,
+                 lr=2e-5, weight_decay=0.0, logdir=None):
         super().__init__(bart_model_name_or_path, lr, weight_decay, logdir)
         self.latent_structure = latent_structure
         self.bart = BartVAEForConditionalGeneration.from_pretrained(
             self.bart_model_name_or_path, latent_structure=latent_structure,
-            tasks_spec=tasks_spec)
+            tasks_spec=tasks_spec, label_weights=label_weights)
         self.save_hyperparameters()

@@ -54,7 +54,7 @@ class CrossAttention(nn.Module):
 
         self.probs = stable_softmax
         if sparse is True:
-            self.probs = SparsegenLin(lam=0.5)
+            self.probs = SparsegenLin(lam=0.9)
 
     def forward(
         self,
@@ -63,6 +63,7 @@ class CrossAttention(nn.Module):
         mask=None,
         context_mask=None,
         return_attn=False,
+        return_head_output=False,
         rel_pos_bias=None
     ):
         b, i, j = x.shape[0], x.shape[-2], context.shape[-2]
@@ -111,20 +112,24 @@ class CrossAttention(nn.Module):
 
         # src sequence aggregates values from context, context aggregates
         # values from src sequence
-        out = einsum('b h i j, b h j d -> b h i d', attn, context_v)
-        context_out = einsum('b h j i, b h j d -> b h i d', context_attn, v)
+        out_by_head = einsum('b h i j, b h j d -> b h i d', attn, context_v)
+        context_out_by_head = einsum('b h j i, b h j d -> b h i d',
+                                     context_attn, v)
 
         # merge heads and combine out
         out, context_out = map(lambda t: rearrange(
-            t, 'b h n d -> b n (h d)'), (out, context_out))
+            t, 'b h n d -> b n (h d)'), (out_by_head, context_out_by_head))
 
         out = self.to_out(out)
         context_out = self.context_to_out(context_out)
 
-        if return_attn:
-            return out, context_out, attn, context_attn
+        rvals = [out, context_out]
+        if return_attn is True:
+            rvals.extend([attn, context_attn])
+        if return_head_output is True:
+            rvals.extend([out_by_head, context_out_by_head])
 
-        return out, context_out
+        return rvals
 
 
 class SparsegenLin(torch.nn.Module):
@@ -144,11 +149,9 @@ class SparsegenLin(torch.nn.Module):
     As lam --> -inf, output approaches uniform.
     """
 
-    def __init__(self, dim=None, lam=0.0):
+    def __init__(self, lam=0.0):
         """
         Args:
-            dim (int, optional): The dimension over which to apply
-                                 the sparsegen function.
             lam (float): The lambda parameter. Default 0.0.
         """
         super().__init__()
