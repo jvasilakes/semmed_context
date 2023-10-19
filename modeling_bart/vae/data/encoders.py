@@ -156,20 +156,8 @@ class SolidMarkerEncoder(DefaultEncoder):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.special_tokens_map = {"subj_start_token": 1629,  # "$",
-                                   "subj_end_token": 45946,   # "=$",
-                                   "obj_start_token": 1039,   # "@",
-                                   "obj_end_token": 49436}    # "@#"
-
-        #self.special_tokens = {"subj_start_token": "<subj>",
-        #                       "subj_end_token": "</subj>",
-        #                       "obj_start_token": "<obj>",
-        #                       "obj_end_token": "</obj>"}
-        #self.tokenizer.add_special_tokens(
-        #    {"additional_special_tokens": list(self.special_tokens.values())})
-        #self.special_tokens_map = {
-        #    role: self.tokenizer.vocab[token]
-        #    for (role, token) in self.special_tokens.items()}
+        self.special_tokens_map = {"entity_start": 50128,  # 'Ĕ'
+                                   "entity_end": 50129}    # 'ĕ'
 
     def encode_single_example(self, example):
         data = example["json"]
@@ -216,12 +204,11 @@ class SolidMarkerEncoder(DefaultEncoder):
             target_encoded = self.tokenizer(
                 target_predicate, max_length=20,
                 padding="max_length", truncation=True,
-                return_token_type_ids=False,
-                return_attention_mask=False)
+                return_token_type_ids=False)
             data["encoded"]["labels"] = torch.as_tensor(
                 target_encoded["input_ids"])
         else:
-            data["encoded"]["labels"] = data["encoded"]["input_ids"]
+            data["encoded"]["labels"] = encoded["input_ids"].squeeze()
 
         # 2 is the decoder_start_token_id for BART
         data["encoded"]["decoder_input_ids"] = shift_tokens_right(
@@ -263,9 +250,9 @@ class SolidMarkerEncoder(DefaultEncoder):
 
         new_texts = []
         all_new_entity_idxs = []
+        start_marker_id = self.special_tokens_map["entity_start"]
+        end_marker_id = self.special_tokens_map["entity_end"]
         for (ids, spans) in zip(tokenizer_output["input_ids"], spans_to_mark):
-            start_marker_id = self.special_tokens_map["subj_start_token"]
-            end_marker_id = self.special_tokens_map["subj_end_token"]
             # Make sure we process spans from left to right in the input.
             spans = sorted(spans, key=lambda s: s[0])
             new_entity_idxs = []
@@ -282,20 +269,19 @@ class SolidMarkerEncoder(DefaultEncoder):
                                  torch.LongTensor([end_marker_id]),
                                  ids[end+1:(self.max_seq_length-2)])
                                 )
-                start_marker_id = self.special_tokens_map["obj_start_token"]
-                end_marker_id = self.special_tokens_map["obj_end_token"]
             if self.tokenizer.eos_token_id not in ids:
                 # Just in case the sentence was truncated, we may have
                 # cut out the eos token. Add it back in.
                 ids[-1] = self.tokenizer.eos_token_id
-            new_texts.append(self.tokenizer.decode(ids))
+            new_texts.append(
+                self.tokenizer.decode(ids, skip_special_tokens=True))
             all_new_entity_idxs.append(new_entity_idxs)
         # It's not ideal, but to get the correct token_type_ids and
         # attention_masks it is easiest to just re-run the solid-marked
         # input through the tokenizer.
         new_encodings = self.tokenizer(
             new_texts, max_length=self.max_seq_length, padding="max_length",
-            truncation=True, add_special_tokens=False,
+            truncation=True, add_special_tokens=True,
             return_tensors="pt")
         return new_encodings, all_new_entity_idxs
 

@@ -14,6 +14,11 @@ def name(val):
 
 
 @config.parameter(group="Experiment", types=str)
+def description(val):
+    assert val != ''
+
+
+@config.parameter(group="Experiment", types=str)
 def logdir(val):
     pass
 

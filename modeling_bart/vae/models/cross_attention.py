@@ -89,13 +89,14 @@ class CrossAttention(nn.Module):
         if rel_pos_bias is not None:
             sim = sim + rel_pos_bias
 
-        if mask is not None or context_mask is not None:
-            mask = mask or torch.ones(
-                (b, i), device=device, dtype=torch.bool)
-            context_mask = context_mask or torch.ones(
-                (b, j), device=device, dtype=torch.bool)
-            attn_mask = rearrange(mask, 'b i -> b 1 i 1') * rearrange(context_mask, 'b j -> b 1 1 j')  # noqa
-            sim = sim.masked_fill(~attn_mask, -torch.finfo(sim.dtype).max)
+        if mask is None:
+            mask = torch.ones((b, i), device=device)
+        if context_mask is None:
+            context_mask = context_mask or torch.ones((b, j), device=device)
+        mask = mask.bool()
+        context_mask = context_mask.bool()
+        attn_mask = rearrange(mask, 'b i -> b 1 i 1') * rearrange(context_mask, 'b j -> b 1 1 j')  # noqa
+        sim = sim.masked_fill(~attn_mask, -torch.finfo(sim.dtype).max)
 
         # get attention along both sequence and context length dimensions
         # shared similarity matrix

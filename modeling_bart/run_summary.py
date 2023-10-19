@@ -267,15 +267,21 @@ def decode_and_split_by_task(unbatched, datamodule):
             input_ids, skip_special_tokens=True)
         target_ids = encodings["labels"]
         target_tokens = datamodule.tokenizer.decode(
-            target_ids, skip_special_tokens=True)
-        pred_ids = example["json"]["predictions"]
+            target_ids, skip_special_tokens=False)
+        pred_ids = example["json"]["token_predictions"]
         pred_tokens = datamodule.tokenizer.decode(
-            pred_ids, skip_special_tokens=True)
+            pred_ids, skip_special_tokens=False)
+        task_predictions = {}
+        for (task, preds) in example["json"]["tasks"].items():
+            task_predictions[task] = {
+                "predictions": preds,
+                "labels": example["json"]["labels"][task]}
         yield {"__key__": example["__key__"],
                "__url__": example["__url__"],
                "inputs": input_tokens,
                "targets": target_tokens,
-               "predictions": pred_tokens}
+               "predictions": pred_tokens,
+               "tasks": task_predictions}
 
 
 def format_results_as_markdown_table(results_dict):

@@ -55,7 +55,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
         total_loss = outputs.loss
         # TODO: add KL weights to config
         for (key, kl) in outputs.kls.items():
-            total_loss += 0.01 * kl
+            total_loss += 0.001 * kl
             self.log(f"train_kl_{key}", kl)
             if key in outputs.task_losses:
                 task_loss = outputs.task_losses[key]
@@ -157,7 +157,11 @@ class AbstractBartSummaryModel(pl.LightningModule):
         outputs = self.get_model_outputs(batch)
         pred_ids = outputs.logits.argmax(-1)
         batch_cp = deepcopy(batch)
-        batch_cp["json"]["predictions"] = pred_ids
+        batch_cp["json"]["token_predictions"] = pred_ids
+        batch_cp["json"]["tasks"] = {}
+        for (task, logits) in outputs.task_logits.items():
+            preds = logits.argmax(-1)
+            batch_cp["json"]["tasks"][task] = preds
         return batch_cp
 
     def configure_optimizers(self):

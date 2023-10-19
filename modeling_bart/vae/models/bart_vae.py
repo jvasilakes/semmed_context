@@ -50,23 +50,29 @@ class BartVAEModel(BartPretrainedModel):
         self.z_projectors = nn.ModuleDict()
         self.discriminators = nn.ModuleDict()
         total_latent_dim = 0
-        latent_proj_dim = 128
         attn_head_dim = 64
         for (latent_name, latent_dim) in self.latent_structure.items():
+            #indim = attn_head_dim
+            #if latent_name == "entity":
+            #    indim = hidden_size
+            indim = hidden_size
             self.context2params[latent_name] = nn.Linear(
                     # 2 for mu, logvar
-                    attn_head_dim, 2 * latent_dim)
+                    indim, 2 * latent_dim)
             self.z_projectors[latent_name] = nn.Linear(
-                latent_dim, latent_proj_dim)
+                latent_dim, hidden_size)
             total_latent_dim += latent_dim
             if latent_name in self.tasks_spec.keys():
                 self.discriminators[latent_name] = nn.Linear(
                     latent_dim, self.tasks_spec[latent_name])
-        num_latents = len(self.latent_structure)
+        num_latents = len(set(self.latent_structure.keys()) - {"entity"})
+        # TODO: add sparse to config
         self.latent_cross_attn = CrossAttention(
             dim=hidden_size, heads=num_latents, dim_head=attn_head_dim,
             context_dim=hidden_size, sparse=False)
         self.layernorm = nn.LayerNorm(hidden_size)
+
+        self.sentence_projector = nn.Linear(2 * hidden_size, hidden_size)
 
     def get_input_embeddings(self):
         return self.shared
@@ -140,36 +146,77 @@ class BartVAEModel(BartPretrainedModel):
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,  # noqa
             )
 
+        # ========================================================
+        # Step 1: Get the entity representations by masking the hidden_states
+        # ========================================================
         hidden_states = encoder_outputs.last_hidden_state
-        # TODO: get sentence representation from solid markers using the same
-        # masking logic.
-        #if len(self.special_tokens_map) > 0:
-        #    mask_token_ids = self.special_tokens_map.values()
-        #else:
-        #    mask_token_ids = self.config.eos_token_id
-        #sentence_representation = self._mask_and_pool_hidden(
-        #    hidden_states, mask_token_ids)
+        # TODO: remove hard coded entity start id
+        entity_mask = input_ids.eq(50128).to(hidden_states.device)
+        if len(torch.unique_consecutive(entity_mask.sum(1))) > 1:
+            raise ValueError("All examples must have the same number of entity_start tokens.")  # noqa
+        entity_reps = hidden_states[entity_mask, :].view(
+            hidden_states.size(0), -1, hidden_states.size(-1))
 
-        eos_mask = input_ids.eq(self.config.eos_token_id).to(hidden_states.device)  # noqa
-        if len(torch.unique_consecutive(eos_mask.sum(1))) > 1:
-            raise ValueError("All examples must have the same number of <eos> tokens.")  # noqa
-        sentence_representation = hidden_states[eos_mask, :].view(
-            hidden_states.size(0), -1, hidden_states.size(-1))[:, -1, :]
+        # ========================================================
+        # Step 2: Get the sentence representation by concatenating
+        # and projecting the entity representations.
+        # ========================================================
+        sentence_representation = self.sentence_projector(
+            entity_reps.view(hidden_states.size(0), -1))
 
-        sent_out, hidden_out, sent_attn, hidden_attn, sent_by_head, hidden_by_head = self.latent_cross_attn(  # noqa
-            sentence_representation.unsqueeze(1),
-            hidden_states, return_attn=True, return_head_output=True)
+        # ========================================================
+        # Step 3: Compute attention between the sentence representation and
+        # the hidden states using a separate attention head for each
+        # latent space that is not the entity space.
+        # ========================================================
+        #sent_out, hidden_out, sent_attn, hidden_attn, sent_by_head, hidden_by_head = self.latent_cross_attn(  # noqa
+        #    sentence_representation.unsqueeze(1), hidden_states,
+        #    context_mask=attention_mask,
+        #    return_attn=True, return_head_output=True)
 
-        latent_params = self.compute_latent_params(sent_by_head.squeeze(2))
+        # ========================================================
+        # Step 4a: Assign a latent space to the output of each attention head.
+        # ========================================================
+        #sent_by_head = sent_by_head.squeeze(2)
+        #latents_no_entities = sorted(set(self.latent_structure.keys()) - {"entity"})  # noqa
+        #sent_by_latent = dict(zip(latents_no_entities,
+        #                          sent_by_head.permute(1, 0, 2)))
+
+        # ========================================================
+        # Step 4b: Compute the latent values for each latent space
+        # besides the entity space.
+        # ========================================================
+        latents_no_entities = sorted(set(self.latent_structure.keys()) - {"entity"})  # noqa
+        sent_by_latent = {latent_name: sentence_representation
+                          for latent_name in latents_no_entities}
+        latent_params = self.compute_latent_params(sent_by_latent)
         zs = []
         task_logits = {}
         for latent_name in sorted(latent_params.keys()):
             z = latent_params[latent_name].rsample()
-            zs.append(z)
+            zs.append(self.z_projectors[latent_name](z))
             if latent_name in self.discriminators.keys():
                 task_logits[latent_name] = self.discriminators[latent_name](z)
+
+        # ========================================================
+        # Step 4c: Compute the latent values for each entity,
+        # projecting them into the same latent space.
+        # ========================================================
+        for (i, entity_rep) in enumerate(entity_reps.permute(1, 0, 2)):
+            entity_params = self.compute_latent_params({"entity": entity_rep})
+            latent_params[f"entity{i}"] = entity_params["entity"]
+            z = entity_params["entity"].rsample()
+            zs.append(self.z_projectors["entity"](z))
+
+        # ========================================================
+        # Step 5: Decode providing the latent values in place of the
+        # encoder hidden states. This means that the decoder will
+        # only compute cross attentions between the output and the latents.
+        # ========================================================
+        decoder_init = self.layernorm(torch.stack(zs, dim=1))
+        encoder_attention_mask = attention_mask[:, :decoder_init.size(1)]
         # Skip connection + layer normalization
-        decoder_init = self.layernorm(hidden_states + hidden_out)
+        # decoder_init = self.layernorm(hidden_states + hidden_out)
 
         # decoder outputs consists of
         # (dec_features, past_key_value, dec_hidden, dec_attn)
@@ -177,7 +224,7 @@ class BartVAEModel(BartPretrainedModel):
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,
             encoder_hidden_states=decoder_init,
-            encoder_attention_mask=attention_mask,
+            encoder_attention_mask=encoder_attention_mask,
             head_mask=decoder_head_mask,
             past_key_values=past_key_values,
             inputs_embeds=decoder_inputs_embeds,
@@ -202,18 +249,8 @@ class BartVAEModel(BartPretrainedModel):
 
     def compute_latent_params(self, context_per_latent):
         latent_dists = {}
-        for (i, name) in enumerate(sorted(self.context2params.keys())):
+        for (name, context) in context_per_latent.items():
             layer = self.context2params[name]
-            context = context_per_latent[:, i]
-            params = layer(context)
-            mu, logvar = params.chunk(2, dim=-1)
-            dist = D.Normal(mu, torch.exp(logvar))
-            latent_dists[name] = dist
-        return latent_dists
-
-    def old_compute_latent_params(self, context):
-        latent_dists = {}
-        for (name, layer) in self.context2params.items():
             params = layer(context)
             mu, logvar = params.chunk(2, dim=-1)
             dist = D.Normal(mu, torch.exp(logvar))
@@ -241,6 +278,8 @@ class BartVAEForConditionalGeneration(BartForConditionalGeneration):
         self.label_weights = label_weights or {}
         self.label_weights = {task: torch.as_tensor(ws)
                               for (task, ws) in self.label_weights.items()}
+        self.loss_fct = nn.CrossEntropyLoss(
+            ignore_index=self.config.pad_token_id)
 
     def forward(
         self,
@@ -296,8 +335,7 @@ class BartVAEForConditionalGeneration(BartForConditionalGeneration):
         masked_lm_loss = None
         if labels is not None:
             labels = labels.to(lm_logits.device)
-            loss_fct = nn.CrossEntropyLoss()
-            masked_lm_loss = loss_fct(
+            masked_lm_loss = self.loss_fct(
                 lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
 
         if not return_dict:

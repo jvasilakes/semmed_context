@@ -1,2 +1,2 @@
-from .util import MODEL_REGISTRY
-from .summary import BartSummaryModel, BartVAESummaryModel
+from .util import MODEL_REGISTRY  # noqa
+from .summary import BartSummaryModel, BartVAESummaryModel  # noqa
