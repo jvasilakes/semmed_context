@@ -1,4 +1,5 @@
 import os
+import json
 import random
 from copy import deepcopy
 from glob import glob
@@ -22,12 +23,14 @@ class SemRepFactDataset(object):
                       "Certain": 1},   # L3
         "Polarity": {"Negative": 0,
                      "Positive": 1},
+        # Uncommitted is omitted
         "Factuality": {"Fact": 0,
                        "Counterfact": 1,
                        "Probable": 2,
-                       # Uncommitted is omitted
                        "Possible": 3,
                        "Doubtful": 4},
+        # "COMPLICATES" and "MANIFESTATION_OF" are omitted
+        # due to very low frequencies (0.3% and 0.2%).
         "Predicate": {"AFFECTS": 0,
                       "ASSOCIATED_WITH": 1,
                       "AUGMENTS": 2,
@@ -40,9 +43,11 @@ class SemRepFactDataset(object):
                       "PREVENTS": 9,
                       "PRODUCES": 10,
                       "STIMULATES": 11,
-                      "TREATS": 12}
-        # "COMPLICATES" and "MANIFESTATION_OF" are omitted
-        # due to very low frequencies (0.3% and 0.2%).
+                      "TREATS": 12},
+        # Which of the entities is the subject.
+        # 0: first entity in the sentence
+        # This label is defined dynamically in the data encoder.
+        "Subject_Entity": {0: 0, 1: 1}
     }
 
     @property
@@ -256,6 +261,172 @@ class SemRepFactDataset(object):
 
     def summarize(self):
         for split in ["train", "val", "test"]:
+            print(split.upper())
+            print("=" * len(split))
+            split_data = getattr(self, split)
+
+            n = 0
+            task_counts = defaultdict(lambda: defaultdict(int))
+            for example in tqdm(split_data):
+                n += 1
+                example = self.inverse_transform_labels(example)
+                for (task, val) in example["json"]["labels"].items():
+                    task_counts[task][val] += 1
+
+            count_strings = {}
+            for (task, counts) in task_counts.items():
+                sorted_counts = sorted(counts.items(), key=lambda x: x[0])
+                counts_str = '\n      '.join(
+                    [f"{key}: {val} ({(val/n)*100:.2f}%)"
+                     for (key, val) in sorted_counts])
+                count_strings[task] = counts_str
+
+            print(f"  N: {n}")
+            print("  Labels")
+            for (task, tc) in count_strings.items():
+                print(f"    {task}:\n      {tc}")
+            print()
+
+
+class ConceptNetDataset(object):
+
+    LABEL_ENCODINGS = {"polarity": {0: 0,
+                                    1: 1},
+                       "predicate": {
+                           "AtLocation":      0,
+                           "CapableOf":       1,
+                           "Causes":          2,
+                           "CausesDesire":    3,
+                           "Desires":         4,
+                           "HasA":            5,
+                           "HasPrerequisite": 6,
+                           "HasProperty":     7,
+                           "HasSubevent":     8,
+                           "IsA":             9,
+                           "MadeOf":          10,
+                           "MotivatedByGoal": 11,
+                           "NotDesires":      12,
+                           "PartOf":          13,
+                           "ReceivesAction":  14,
+                           "UsedFor":         15
+                        }
+                       }
+
+    @property
+    def INVERSE_LABEL_ENCODINGS(self):
+        try:
+            return getattr(self, "_inverse_label_encodings")
+        except AttributeError:
+            self._inverse_label_encodings = {
+                task: {enc_label: str_label for (str_label, enc_label)
+                       in self.LABEL_ENCODINGS[task].items()}
+                for task in self.LABEL_ENCODINGS}
+            return self._inverse_label_encodings
+
+    @classmethod
+    def from_config(cls, config):
+        encoder_type = config.Data.Encoder.encoder_type.value
+        if encoder_type is None:
+            encoder = None
+        else:
+            encoder = ENCODER_REGISTRY[encoder_type].from_config(config)
+        return cls(datadir=config.Data.datadir.value,
+                   encoder=encoder,
+                   tasks_to_load=config.Data.tasks_to_load.value,
+                   num_examples=config.Data.num_examples.value,
+                   random_seed=config.Experiment.random_seed.value)
+
+    def __init__(self,
+                 datadir,
+                 encoder=None,
+                 tasks_to_load="all",
+                 num_examples=-1,
+                 random_seed=0):
+        super().__init__()
+        assert os.path.isdir(datadir), f"{datadir} is not a directory."
+        self.datadir = datadir
+        if encoder is None:
+            self.encoder = lambda example: example
+        else:
+            self.encoder = encoder
+        self.tasks_to_load = tasks_to_load
+        self.num_examples = num_examples
+        self.rng = random.Random(random_seed)
+
+        if isinstance(tasks_to_load, str):
+            if tasks_to_load == "all":
+                tasks_to_load = list(self.LABEL_ENCODINGS.keys())
+            else:
+                tasks_to_load = [tasks_to_load]
+        assert isinstance(tasks_to_load, (list, tuple))
+        tasks_set = set(tasks_to_load)
+        valid_tasks_set = set(self.LABEL_ENCODINGS)
+        unknown_tasks = tasks_set.difference(valid_tasks_set)
+        assert len(unknown_tasks) == 0, f"Unknown tasks: '{unknown_tasks}'"
+        self.tasks_to_load = tasks_to_load
+        self.train, self.val, self.test = self.load()
+
+    @property
+    def label_spec(self):
+        return {task: len(labs) for (task, labs)
+                in self.LABEL_ENCODINGS.items()
+                if task in self.tasks_to_load}
+
+    def load(self):
+        split_names = ["train", "dev", "test"]
+        split_files = [os.path.join(self.datadir, f"{split}.jsonl")
+                       for split in split_names]
+        is_split = all([os.path.isfile(split_file)
+                        for split_file in split_files])
+        assert is_split is True
+
+        splits = []
+        for (split, split_file) in zip(split_names, split_files):
+            split = self.load_split(split_file)
+            splits.append(split)
+        return splits
+
+    def load_split(self, split_file):
+        examples = []
+        data = [json.loads(line.strip()) for line in open(split_file)]
+        for datum in data:
+            label_dict = {key: datum[key] for key in ["predicate", "polarity"]}
+            example = {"__key__": datum["id"],
+                       "json": {"text": datum["sentence"],
+                                "labels": label_dict}
+                       }
+            example = self.transform_labels(example)
+            example = self.encoder(example)
+            examples.append(example)
+            if len(examples) == self.num_examples:
+                break
+        return examples
+
+    def transform_labels(self, example):
+        excp = deepcopy(example)
+        label_dict = excp["json"].pop("labels")
+        excp["json"]["labels"] = {task: self.LABEL_ENCODINGS[task][val]
+                                  for (task, val) in label_dict.items()}
+        return excp
+
+    def inverse_transform_labels(self, example):
+        excp = deepcopy(example)
+        label_dict = excp["json"].pop("labels")
+        excp["json"]["labels"] = {
+            task: self.INVERSE_LABEL_ENCODINGS[task][val]
+            for (task, val) in label_dict.items()}
+        return excp
+
+    def tasks_filter(self, sample):
+        if self.tasks_to_load == "all":
+            return sample
+        sample["json"]["labels"] = {
+            k: v for (k, v) in sample["json"]["labels"].items()
+            if k in self.tasks_to_load}
+        return sample
+
+    def summarize(self):
+        for split in ["train", "dev", "test"]:
             print(split.upper())
             print("=" * len(split))
             split_data = getattr(self, split)

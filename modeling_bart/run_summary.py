@@ -8,11 +8,11 @@ from collections import defaultdict
 
 import torch
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from config_summary import config
-from vae.data import SemRepFactDataModule
+from vae.data import SemRepFactDataModule, ConceptNetDataModule
 from vae.models import MODEL_REGISTRY
 
 
@@ -78,13 +78,23 @@ def run_train(config, quiet=False):
     seed = config.Experiment.random_seed.value
     version_str = f"version_{version}/seed_{seed}"
     version_dir = os.path.join(logdir, exp_name, version_str)
-    os.makedirs(version_dir, exist_ok=False)
-    config.yaml(outpath=os.path.join(version_dir, "config.yaml"))
 
+    # datamodule = ConceptNetDataModule(config)
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
-    model = MODEL_REGISTRY[config.Model.model_name.value].from_config(
+    model_class = MODEL_REGISTRY[config.Model.model_name.value]
+    ckpt_path = None
+    if os.path.exists(version_dir):
+        try:
+            ckpt_path, hparams_path = find_model_checkpoint(config)
+        except OSError:
+            raise OSError(f"Version dir already exists at {version_dir}, but no checkpoint found!")  # noqa
+        finally:
+            warnings.warn(f"Resuming training checkpoint from {ckpt_path}.")
+    os.makedirs(version_dir, exist_ok=True)
+    config.yaml(outpath=os.path.join(version_dir, "config.yaml"))
+    model = model_class.from_config(
         config, tasks_spec=datamodule.label_spec, logdir=version_dir)
     model.train()
 
@@ -93,7 +103,9 @@ def run_train(config, quiet=False):
 
     filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
-        monitor="val_total_loss", mode="min", filename=filename_fmt)
+        monitor="val_loss_no_kl", mode="min", filename=filename_fmt)
+        #monitor="train_recon_loss", mode="min", filename=filename_fmt)
+    lr_cb = LearningRateMonitor(logging_interval="step")
 
     if torch.cuda.is_available():
         available_gpus = min(1, torch.cuda.device_count())
@@ -104,13 +116,14 @@ def run_train(config, quiet=False):
     trainer = pl.Trainer(
         max_epochs=config.Training.epochs.value,
         accumulate_grad_batches=config.Training.accumulate_grad_batches.value,
+        gradient_clip_val=1,
         gpus=available_gpus,
         logger=logger,
-        callbacks=[checkpoint_cb],
+        callbacks=[checkpoint_cb, lr_cb],
         log_every_n_steps=1,
         check_val_every_n_epoch=1,
         enable_progress_bar=not quiet)
-    trainer.fit(model, datamodule=datamodule)
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
 
 
 def run_validate(config, datasplit, quiet=False):
@@ -151,6 +164,7 @@ def run_validate(config, datasplit, quiet=False):
 
 
 def run_predict(config, datasplit, quiet=False):
+    # datamodule = ConceptNetDataModule(config)
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
@@ -200,7 +214,9 @@ def run_predict(config, datasplit, quiet=False):
 
     outdir = os.path.join(preddir, datasplit)
     os.makedirs(outdir, exist_ok=True)
-    outfile = os.path.join(outdir, "predictions.jsonl")
+    ckpt_name = os.path.splitext(os.path.basename(ckpt_path))[0]
+    pred_fname = f"predictions_{ckpt_name}.jsonl"
+    outfile = os.path.join(outdir, pred_fname)
     with open(outfile, 'w') as outF:
         for example in preds_decoded:
             json.dump(example, outF)
@@ -267,15 +283,17 @@ def decode_and_split_by_task(unbatched, datamodule):
             input_ids, skip_special_tokens=True)
         target_ids = encodings["labels"]
         target_tokens = datamodule.tokenizer.decode(
-            target_ids, skip_special_tokens=False)
+            target_ids, skip_special_tokens=True)
         pred_ids = example["json"]["token_predictions"]
         pred_tokens = datamodule.tokenizer.decode(
-            pred_ids, skip_special_tokens=False)
+            pred_ids, skip_special_tokens=True)
         task_predictions = {}
         for (task, preds) in example["json"]["tasks"].items():
             task_predictions[task] = {
                 "predictions": preds,
                 "labels": example["json"]["labels"][task]}
+        if "__url__" not in example:
+            example["__url__"] = None
         yield {"__key__": example["__key__"],
                "__url__": example["__url__"],
                "inputs": input_tokens,

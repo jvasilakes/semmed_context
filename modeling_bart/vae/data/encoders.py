@@ -70,28 +70,34 @@ class DefaultEncoder(Encoder):
                                  max_length=self.max_seq_length,
                                  padding="max_length", truncation=True)
 
-        subj_start, subj_end = data["subject"][1:]
-        obj_start, obj_end = data["object"][1:]
-        prev_end = 0
-        subj_idxs = [None, None]
-        obj_idxs = [None, None]
-        for (token_i, (start, end)) in enumerate(encoded["offset_mapping"]):
-            if prev_end <= subj_start and start >= subj_start:
-                subj_idxs[0] = token_i
-            elif prev_end <= subj_end and start >= subj_end:
-                subj_idxs[1] = token_i
-            if prev_end <= obj_start and start >= obj_start:
-                obj_idxs[0] = token_i
-            elif prev_end <= obj_end and start >= obj_end:
-                obj_idxs[1] = token_i
-            if all(subj_idxs + obj_idxs):  # None casts to False
-                break
-            prev_end = end
+        if "subject" in data.keys() and "object" in data.keys():
+            subj_start, subj_end = data["subject"][1:]
+            obj_start, obj_end = data["object"][1:]
+            prev_end = 0
+            subj_idxs = [None, None]
+            obj_idxs = [None, None]
+            for (token_i, (start, end)) in enumerate(encoded["offset_mapping"]):  # noqa
+                if prev_end <= subj_start and start >= subj_start:
+                    subj_idxs[0] = token_i
+                elif prev_end <= subj_end and start >= subj_end:
+                    subj_idxs[1] = token_i
+                if prev_end <= obj_start and start >= obj_start:
+                    obj_idxs[0] = token_i
+                elif prev_end <= obj_end and start >= obj_end:
+                    obj_idxs[1] = token_i
+                if all(subj_idxs + obj_idxs):  # None casts to False
+                    break
+                prev_end = end
+            if not all(subj_idxs + obj_idxs):
+                warnings.warn("Can't find subject or object. Try increasing max_seq_length")  # noqa
+                return None
+            all_idxs = subj_idxs + obj_idxs
+            data["subject_idxs"] = torch.as_tensor(all_idxs[:2])
+            data["object_idxs"] = torch.as_tensor(all_idxs[2:])
+            # Just keep the text, we don't need the character offsets anymore.
+            data["subject"] = data["subject"][0]
+            data["object"] = data["object"][0]
         del encoded["offset_mapping"]  # no longer needed
-        if not all(subj_idxs + obj_idxs):
-            warnings.warn("Can't find subject or object. Try increasing max_seq_length")  # noqa
-            return None
-        all_idxs = subj_idxs + obj_idxs
         data["encoded"] = {k: torch.as_tensor(v)
                            for (k, v) in encoded.items()}
 
@@ -112,11 +118,6 @@ class DefaultEncoder(Encoder):
             data["encoded"]["labels"].unsqueeze(0),
             self.tokenizer.pad_token_id, 2).squeeze()
 
-        data["subject_idxs"] = torch.as_tensor(all_idxs[:2])
-        data["object_idxs"] = torch.as_tensor(all_idxs[2:])
-        # Just keep the text, we don't need the character offsets anymore.
-        data["subject"] = data["subject"][0]
-        data["object"] = data["object"][0]
         return example
 
     def get_predicate_text(self, data):
@@ -190,6 +191,7 @@ class SolidMarkerEncoder(DefaultEncoder):
 
         pack_on = np.array([subj_idxs, obj_idxs])
         insert_order = np.argsort(pack_on, axis=0)[:, 0]
+        data["labels"]["Subject_Entity"] = insert_order[0]
         packed_encoded, new_entity_idxs = self.add_solid_markers(
             encoded, [pack_on[insert_order]])
 

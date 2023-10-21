@@ -2,7 +2,7 @@ import os
 
 from experiment_config import Config, get_and_run_config_command
 
-from vae.models.util import MODEL_REGISTRY
+from vae.models.util import MODEL_REGISTRY, DISTRIBUTION_REGISTRY
 
 
 config = Config("BARTConfig")
@@ -93,12 +93,16 @@ def bart_model_name_or_path(val):
     pass
 
 
-@config.parameter(group="Model", default={"total": 128}, types=dict)
+@config.parameter(group="Model", default={"content": [128, "normal"]}, types=dict)  # noqa
 def latent_structure(val):
-    for (name, dims) in val.items():
+    """
+    {latent_name: [dims, distribution_name]}
+    """
+    for (name, (dims, dist_name)) in val.items():
         assert isinstance(name, str)
         assert isinstance(dims, int)
         assert dims > 0
+        assert dist_name in DISTRIBUTION_REGISTRY.keys()
 
 
 @config.parameter(group="Training", default=1, types=int)

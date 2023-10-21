@@ -45,6 +45,16 @@ def register_loss(name):
     return add_to_registry
 
 
+DISTRIBUTION_REGISTRY = {}
+
+
+def register_distribution(name):
+    def add_to_registry(cls):
+        DISTRIBUTION_REGISTRY[name] = cls
+        return cls
+    return add_to_registry
+
+
 @dataclass
 class SequenceClassifierOutputWithTokenMask(ModelOutput):
     logits: torch.FloatTensor = None
@@ -53,6 +63,15 @@ class SequenceClassifierOutputWithTokenMask(ModelOutput):
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
     mask: Optional[torch.FloatTensor] = None
+
+
+@dataclass
+class VAEEncoderOutput(ModelOutput):
+    last_hidden_state: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    attentions: Optional[Tuple[torch.FloatTensor]] = None
+    latent_params: Dict = None
+    task_logits: Dict[str, torch.FloatTensor] = None
 
 
 @dataclass

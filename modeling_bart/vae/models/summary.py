@@ -3,6 +3,7 @@ import json
 from copy import deepcopy
 from collections import defaultdict
 
+import torch
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim import AdamW
@@ -21,7 +22,7 @@ transformers_logging.set_verbosity_error()
 class AbstractBartSummaryModel(pl.LightningModule):
 
     @classmethod
-    def from_config(cls, config, logdir=None):
+    def from_config(cls, config, logdir=None, **kwargs):
         return cls(config.Model.bart_model_name_or_path.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
@@ -35,27 +36,30 @@ class AbstractBartSummaryModel(pl.LightningModule):
         self.weight_decay = weight_decay
         self.bart = None
         self.epoch = 0
+        # TODO: add KL weights to config
+        self.kl_weight = 0.001
 
         self.logdir = logdir
         if self.logdir is not None:
-            os.makedirs(os.path.join(self.logdir, "latents"), exist_ok=True)
+            os.makedirs(os.path.join(self.logdir, "metadata"), exist_ok=True)
 
-    def forward(self, bart_inputs, task_labels):
-        bart_outputs = self.bart(**bart_inputs, task_labels=task_labels)
+    def forward(self, bart_inputs, task_labels=None):
+        kwargs = {}
+        if task_labels is not None:
+            kwargs["task_labels"] = task_labels
+        bart_outputs = self.bart(**bart_inputs, **kwargs)
         return bart_outputs
 
     def get_model_outputs(self, batch):
-        outputs = self(batch["json"]["encoded"],
-                       task_labels=batch["json"]["labels"])
+        outputs = self(batch["json"]["encoded"])
         return outputs
 
     def training_step(self, batch, batch_idx):
         outputs = self.get_model_outputs(batch)
         self.log("train_recon_loss", outputs.loss)
         total_loss = outputs.loss
-        # TODO: add KL weights to config
         for (key, kl) in outputs.kls.items():
-            total_loss += 0.001 * kl
+            total_loss += self.kl_weight * kl
             self.log(f"train_kl_{key}", kl)
             if key in outputs.task_losses:
                 task_loss = outputs.task_losses[key]
@@ -77,8 +81,13 @@ class AbstractBartSummaryModel(pl.LightningModule):
                 epoch_zs[latent].extend(
                     params.rsample().detach().cpu().tolist())
             for (task, logits) in batch["task_logits"].items():
-                task_preds[task].extend(logits.argmax(-1).detach().cpu().tolist())  # noqa
-                task_labels[task].extend(batch["task_labels"][task].cpu().tolist())  # noqa
+                if logits.dim() == 1:
+                    preds = (torch.sigmoid(logits) >= 0.5).long()
+                else:
+                    preds = logits.argmax(-1)
+                labels = batch["task_labels"][task].cpu().tolist()
+                task_preds[task].extend(preds.detach().cpu().tolist())
+                task_labels[task].extend(labels)
 
         for (task, preds) in task_preds.items():
             p, r, f, _ = precision_recall_fscore_support(
@@ -87,8 +96,12 @@ class AbstractBartSummaryModel(pl.LightningModule):
             self.log(f"train_recall_{task}", r)
 
         if self.logdir is not None:
-            with open(f"{self.logdir}/latents/{self.epoch}.json", 'w') as outF:
+            z_outfile = f"{self.logdir}/metadata/z_{self.epoch}.json"
+            with open(z_outfile, 'w') as outF:
                 json.dump(dict(epoch_zs), outF)
+            labels_outfile = f"{self.logdir}/metadata/labels_{self.epoch}.json"
+            with open(labels_outfile, 'w') as outF:
+                json.dump(dict(task_labels), outF)
         self.epoch += 1
 
     def validation_step(self, batch, batch_idx):
@@ -97,14 +110,20 @@ class AbstractBartSummaryModel(pl.LightningModule):
         total_loss = outputs.loss
         # TODO: add KL weights to config
         for (key, kl) in outputs.kls.items():
-            total_loss += 0.01 * kl
+            total_loss += self.kl_weight * kl
             if key in outputs.task_losses:
                 task_loss = outputs.task_losses[key]
                 total_loss += task_loss
 
         token_pred_ids = outputs.logits.argmax(-1)
-        task_preds = {task: logits.argmax(-1).cpu().tolist() for (task, logits)
-                      in outputs.task_logits.items()}
+        task_preds = {}
+        for (task, logits) in outputs.task_logits.items():
+            if logits.dim() == 1:
+                preds = (torch.sigmoid(logits) >= 0.5).long()
+            else:
+                preds = logits.argmax(-1)
+            preds = preds.detach().cpu().tolist()
+            task_preds[task] = preds
         metrics = {"recon_loss": outputs.loss.detach().cpu().item(),
                    "task_losses": {key: loss.detach().cpu().item()
                                    for (key, loss) in outputs.task_losses.items()},  # noqa
@@ -141,9 +160,8 @@ class AbstractBartSummaryModel(pl.LightningModule):
             self.log(f"val_kl_{latent}", np.mean(kls))
         for (task, losses) in task_losses.items():
             self.log(f"val_task_loss_{task}", np.mean(losses))
-        self.log("val_total_loss",
+        self.log("val_loss_no_kl",
                  (np.mean(recon_losses) +
-                  np.sum([np.mean(kls) for kls in latent_kls.values()]) +
                   np.sum([np.mean(losses) for losses in task_losses.values()]))
                  )
 
@@ -155,12 +173,18 @@ class AbstractBartSummaryModel(pl.LightningModule):
 
     def predict_step(self, batch, batch_idx):
         outputs = self.get_model_outputs(batch)
-        pred_ids = outputs.logits.argmax(-1)
+        pred_ids = self.bart.generate(
+            batch["json"]["encoded"]["input_ids"], num_beams=1,
+            num_beam_groups=1, do_sample=False,
+            max_length=256, early_stopping=True)
         batch_cp = deepcopy(batch)
         batch_cp["json"]["token_predictions"] = pred_ids
         batch_cp["json"]["tasks"] = {}
         for (task, logits) in outputs.task_logits.items():
-            preds = logits.argmax(-1)
+            if logits.dim() == 1:
+                preds = (torch.sigmoid(logits) >= 0.5).long()
+            else:
+                preds = logits.argmax(-1)
             batch_cp["json"]["tasks"][task] = preds
         return batch_cp
 
@@ -168,7 +192,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
         opt = AdamW(self.parameters(),
                     lr=self.lr,
                     weight_decay=self.weight_decay)
-        return opt
+        return [opt]
 
 
 @register_model("default")
@@ -204,3 +228,8 @@ class BartVAESummaryModel(AbstractBartSummaryModel):
             self.bart_model_name_or_path, latent_structure=latent_structure,
             tasks_spec=tasks_spec, label_weights=label_weights)
         self.save_hyperparameters()
+
+    def get_model_outputs(self, batch):
+        outputs = self(batch["json"]["encoded"],
+                       task_labels=batch["json"]["labels"])
+        return outputs
