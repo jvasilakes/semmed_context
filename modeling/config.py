@@ -204,7 +204,8 @@ def validate_parameters():
         # e.g., levitated_marker vs. levitated_marker_attentions
         assert config.Data.Encoder.encoder_type.value in config.Model.model_name.value  # noqa
     if "attention" not in config.Model.model_name.value:
-        assert "attention" not in config.Model.levitated_pool_fn.value
+        if config.Model.levitated_pool_fn.value is not None:
+            assert "attention" not in config.Model.levitated_pool_fn.value
 
 
 if __name__ == "__main__":
