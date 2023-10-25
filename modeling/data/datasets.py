@@ -57,7 +57,7 @@ class SemRepFactDataset(object):
             return self._inverse_label_encodings
 
     @classmethod
-    def from_config(cls, config):
+    def from_config(cls, config, is_gold_standard=False):
         encoder_type = config.Data.Encoder.encoder_type.value
         if encoder_type is None:
             encoder = None
@@ -67,14 +67,16 @@ class SemRepFactDataset(object):
                    encoder=encoder,
                    tasks_to_load=config.Data.tasks_to_load.value,
                    num_examples=config.Data.num_examples.value,
-                   random_seed=config.Experiment.random_seed.value)
+                   random_seed=config.Experiment.random_seed.value,
+                   is_gold_standard=is_gold_standard)
 
     def __init__(self,
                  datadir,
                  encoder=None,
                  tasks_to_load="all",
                  num_examples=-1,
-                 random_seed=0):
+                 random_seed=0,
+                 is_gold_standard=False):
         super().__init__()
         assert os.path.isdir(datadir), f"{datadir} is not a directory."
         self.datadir = datadir
@@ -85,6 +87,11 @@ class SemRepFactDataset(object):
         self.tasks_to_load = tasks_to_load
         self.num_examples = num_examples
         self.rng = random.Random(random_seed)
+        self.is_gold_standard = is_gold_standard
+
+        self.split_probs = [0.8, 0.1, 0.1]
+        if self.is_gold_standard:
+            self.split_probs = [0.0, 0.0, 1.0]
 
         if isinstance(tasks_to_load, str):
             if tasks_to_load == "all":
@@ -164,10 +171,28 @@ class SemRepFactDataset(object):
     def tasks_filter(self, sample):
         if self.tasks_to_load == "all":
             return sample
-        sample["json"]["labels"] = {
-            k: v for (k, v) in sample["json"]["labels"].items()
-            if k in self.tasks_to_load}
+        labels = sample["json"]["labels"]
+        filtered_labels = {}
+        for (task, lab) in labels.items():
+            if task in self.tasks_to_load:
+                filtered_labels[task] = lab
+        if "Factuality" in labels:
+            neg, cert = self._convert_factuality(labels["Factuality"])
+            if "Polarity" in self.tasks_to_load and "Polarity" not in labels:
+                labels["Polarity"] = neg
+            if "Certainty" in self.tasks_to_load and "Certainty" not in labels:
+                labels["Certainty"] = cert
         return sample
+
+    def _convert_factuality(self, fact_label, inverse=False):
+        fact_map = {
+            "Fact": ["Positive", "Certain"],
+            "Probable": ["Positive", "Uncertain"],
+            "Possible": ["Positive", "Uncertain"],
+            "Doubtful": ["Negative", "Uncertain"],
+            "Counterfact": ["Negative", "Certain"]
+                    }
+        return fact_map[fact_label]
 
     def load_ann(self, anndir):
         """
@@ -217,7 +242,11 @@ class SemRepFactDataset(object):
                                     "labels": label_dict}
                            }
                 if keep_example is True:
-                    examples.append(self.transform_labels(example))
+                    example = self.encoder(example)
+                    if example is not None:
+                        example = self.tasks_filter(example)
+                    if example is not None:
+                        examples.append(self.transform_labels(example))
                     num_processed += 1
                 if num_processed == self.num_examples:
                     return examples
@@ -229,7 +258,7 @@ class SemRepFactDataset(object):
         test = []
         splits = [train, val, test]
         for (i, example) in enumerate(examples):
-            split_idx = np.random.choice(range(3), p=[0.8, 0.1, 0.1])
+            split_idx = np.random.choice(range(3), p=self.split_probs)
             splits[split_idx].append(example)
         return splits
 

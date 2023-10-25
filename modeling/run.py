@@ -31,14 +31,14 @@ def parse_args():
     val_parser.add_argument(
         "config_file", type=str, help="Path to yaml config file.")
     val_parser.add_argument("--split", type=str, default="val",
-                            choices=["train", "val", "test"])
+                            choices=["train", "val", "test", "gold"])
     val_parser.add_argument("--quiet", action="store_true", default=False)
 
     predict_parser = subparsers.add_parser("predict", help="Run prediction")
     predict_parser.add_argument(
         "config_file", type=str, help="Path to yaml config file.")
     predict_parser.add_argument("--split", type=str, default="val",
-                                choices=["train", "val", "test"])
+                                choices=["train", "val", "test", "gold"])
     predict_parser.add_argument("--quiet", action="store_true", default=False)
 
     return parser.parse_args()
@@ -116,7 +116,11 @@ def run_train(config, quiet=False):
 
 
 def run_validate(config, datasplit, quiet=False):
-    datamodule = SemRepFactDataModule(config)
+    is_gold_standard = False
+    if datasplit == "gold":
+        is_gold_standard = True
+    datamodule = SemRepFactDataModule(
+        config, is_gold_standard=is_gold_standard)
     datamodule.setup()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
@@ -142,7 +146,7 @@ def run_validate(config, datasplit, quiet=False):
         val_dataloader_fn = datamodule.train_dataloader
     elif datasplit == "val":
         val_dataloader_fn = datamodule.val_dataloader
-    elif datasplit == "test":
+    elif datasplit in ["test", "gold"]:
         val_dataloader_fn = datamodule.test_dataloader
     else:
         raise ValueError(f"Unknown data split '{datasplit}'")
@@ -155,7 +159,11 @@ def run_validate(config, datasplit, quiet=False):
 
 
 def run_predict(config, datasplit, quiet=False):
-    datamodule = SemRepFactDataModule(config)
+    is_gold_standard = False
+    if datasplit == "gold":
+        is_gold_standard = True
+    datamodule = SemRepFactDataModule(
+        config, is_gold_standard=is_gold_standard)
     datamodule.setup()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
@@ -181,7 +189,7 @@ def run_predict(config, datasplit, quiet=False):
         predict_dataloader_fn = datamodule.train_dataloader
     elif datasplit == "val":
         predict_dataloader_fn = datamodule.val_dataloader
-    elif datasplit == "test":
+    elif datasplit in ["test", "gold"]:
         predict_dataloader_fn = datamodule.test_dataloader
     else:
         raise ValueError(f"Unknown data split '{datasplit}'")

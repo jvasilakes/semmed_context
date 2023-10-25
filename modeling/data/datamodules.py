@@ -7,13 +7,15 @@ from .datasets import SemRepFactDataset
 
 class SemRepFactDataModule(pl.LightningDataModule):
 
-    def __init__(self, config):
+    def __init__(self, config, is_gold_standard=False):
         super().__init__()
         self.config = config
+        self.is_gold_standard = is_gold_standard
         self._ran_setup = False
 
     def setup(self):
-        self.dataset = SemRepFactDataset.from_config(self.config)
+        self.dataset = SemRepFactDataset.from_config(
+            self.config, is_gold_standard=self.is_gold_standard)
         self.label_spec = self.dataset.label_spec
         self.batch_size = self.config.Training.batch_size.value
         self.tokenizer = self.dataset.encoder.tokenizer
