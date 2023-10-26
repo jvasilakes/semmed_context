@@ -179,9 +179,10 @@ class SemRepFactDataset(object):
         if "Factuality" in labels:
             neg, cert = self._convert_factuality(labels["Factuality"])
             if "Polarity" in self.tasks_to_load and "Polarity" not in labels:
-                labels["Polarity"] = neg
+                filtered_labels["Polarity"] = neg
             if "Certainty" in self.tasks_to_load and "Certainty" not in labels:
-                labels["Certainty"] = cert
+                filtered_labels["Certainty"] = cert
+        sample["json"]["labels"] = filtered_labels
         return sample
 
     def _convert_factuality(self, fact_label, inverse=False):
@@ -220,8 +221,10 @@ class SemRepFactDataset(object):
                        obj.end_index - sentence["start_char"])
                 label_dict = {task: event.attributes[task].value
                               for task in self.LABEL_ENCODINGS
+                              #for task in self.tasks_to_load
                               if task in event.attributes}
-                label_dict["Predicate"] = pred.type
+                if "Predicate" in self.tasks_to_load:
+                    label_dict["Predicate"] = pred.type
                 # Filter the labels to match the LABEL_ENCODINGS.
                 keep_example = True
                 for task in label_dict:
