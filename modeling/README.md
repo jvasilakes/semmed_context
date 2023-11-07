@@ -72,6 +72,8 @@ where `{split}` is one of `train`, `val`, `test`. This script will use the alrea
 The reannotated dataset will be saved at `path/to/{split}.tar.gz`, and the original will be renamed to
 `path/to/{split}.tar.gz.orig`.
 
+This command will also reannotate the Factuality labels to accord with the new negation labels.
+
 
 ## Running Experiments
 

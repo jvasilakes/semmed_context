@@ -10,7 +10,8 @@ class PubMedBERT(nn.Module):
     """
     def __init__(self):
         super().__init__()
-        self.weight_path = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"  # noqa
+        #self.weight_path = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"  # noqa
+        self.weight_path = "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext"  # noqa
         self.bert = AutoModel.from_pretrained(self.weight_path)
         self.drop = nn.Dropout(0.1, False)
         self.fc_out = nn.Linear(768, 2, True)

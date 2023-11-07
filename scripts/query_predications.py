@@ -4,6 +4,7 @@ import json
 import string
 import sqlite3
 import argparse
+from glob import glob
 
 import numpy as np
 import pandas as pd
@@ -49,6 +50,9 @@ def parse_args():
     parser.add_argument("--cue-list", type=str, default=None,
                         help="""Path to file containing cue words,
                                 one per line.""")
+    parser.add_argument("--pmids", type=str, default=None,
+                        help="""Path to file containing PMIDs to keep,
+                                one per line.""")
     parser.add_argument("--ignore-pmids", type=str, default=None,
                         help="""Path to file containing PMIDs to ignore,
                                 one per line.""")
@@ -58,13 +62,17 @@ def parse_args():
 def main(args):
     # We have to map short forms to long forms (w/o punctuation or whitespace)
     # for the SemRep Factuality pipeline to work properly later.
-    os.makedirs(args.outdir, exist_ok=False)
+    os.makedirs(args.outdir, exist_ok=True)
     semtype_map = load_semtype_map(args.semtype_mappings_file)
     db_conn = sqlite3.connect(args.semmeddb_sqlite)
-    predications, pmids = query_predicates(
-        db_conn, n=args.max_predications,
-        cue_list=args.cue_list,
-        ignore_pmid_list=args.ignore_pmids)
+    predications, pmids = query_predicates_from_anns(
+        db_conn, "/home/jav/Documents/Projects/SemRepFact/predications500k_2/filtered",
+        n=args.max_predications)
+    #predications, pmids = query_predicates(
+    #    db_conn, n=args.max_predications,
+    #    cue_list=args.cue_list,
+    #    pmid_list=args.pmids,
+    #    ignore_pmid_list=args.ignore_pmids)
     sentences = query_sentences(db_conn, pmids)
     save_predications_to_brat(predications, semtype_map, args.outdir)
     save_sentences_to_json(sentences, args.outdir)
@@ -83,7 +91,8 @@ def load_semtype_map(filepath):
     return semtype_map
 
 
-def query_predicates(db_conn, n=-1, cue_list=None, ignore_pmid_list=None):
+def query_predicates(db_conn, n=-1, cue_list=None, pmid_list=None,
+                     ignore_pmid_list=None):
     pred_columns = ','.join(PRED_COLUMNS)
     predicates = ','.join([f"'{pred}'" for pred in PREDICATES])
     query = f"""
@@ -97,6 +106,12 @@ def query_predicates(db_conn, n=-1, cue_list=None, ignore_pmid_list=None):
         ON s.PMID = c.PMID
         WHERE p.PREDICATE IN ({predicates})
     """
+    keep_pmids = []
+    if pmid_list is not None:
+        keep_pmids = [line.strip() for line in open(pmid_list)]
+        keep_pmids = ','.join([f"'{pmid.strip()}'" for pmid in keep_pmids])
+        query += f"AND s.PMID IN ({keep_pmids})"
+
     ignore_pmids = []
     if ignore_pmid_list is not None:
         print("Skipping some PMIDs")
@@ -128,6 +143,9 @@ def query_predicates(db_conn, n=-1, cue_list=None, ignore_pmid_list=None):
                 break
             if row[0] in ignore_pmids:
                 continue
+            if pmid_list is not None:
+                if row[0] not in keep_pmids:
+                    continue
             # keep this example if any cues match, or
             # with a 0.1 percent chance otherwise.
             keep_prob = 1.0
@@ -147,14 +165,82 @@ def query_predicates(db_conn, n=-1, cue_list=None, ignore_pmid_list=None):
 
     except KeyboardInterrupt:
         print("Saving predications fetched so far.")
-    cursor.close()
     print("Done", flush=True)
+    cursor.close()
     if len(cues) > 0:
         perc_matched = (num_matched / len(predications)) * 100
     else:
         perc_matched = 0.0
     print(f"{perc_matched:.2f}% predications matched cues.")
     return predications, pmids
+
+
+def query_predicates_from_anns(db_conn, anndir, n=-1):
+    pred_columns = ','.join(PRED_COLUMNS)
+    predicates = ','.join([f"'{pred}'" for pred in PREDICATES])
+    query = f"""
+    SELECT {pred_columns}
+    FROM PREDICATION AS p
+        INNER JOIN SENTENCE AS s
+        ON p.SENTENCE_ID = s.SENTENCE_ID
+        INNER JOIN PREDICATION_AUX AS a
+        ON p.PREDICATION_ID = a.PREDICATION_ID
+        INNER JOIN CITATIONS AS c
+        ON s.PMID = c.PMID
+        WHERE p.PREDICATE IN ({predicates})
+    """
+    anns = load_anns(anndir)
+    n = len(anns)
+
+    cursor = db_conn.cursor()
+    print("Getting predications...", end='', flush=True)
+
+    pmids = set()
+    predications = []
+    total = n
+    pbar = tqdm(total=total)
+    try:
+        cursor.execute(query)
+        i = 0
+        while True:
+            if i == n:
+                break
+            row = cursor.fetchone()
+            if row is None:
+                break
+            ann_key = (row[0],       # pmid
+                       *row[7:10],   # subj
+                       row[10],      # pred
+                       *row[12:14],   # pred idxs
+                       *row[17:20])  # obj
+            if ann_key in anns:
+                pmids.add(row[0])
+                predications.append(row)
+                i += 1
+                pbar.update()
+
+    except KeyboardInterrupt:
+        print("Saving predications fetched so far.")
+    print("Done", flush=True)
+    cursor.close()
+    return predications, pmids
+
+
+def load_anns(anndir):
+    all_anns = set()
+    annglob = os.path.join(anndir, "*.ann")
+    for annfile in glob(annglob):
+        anns = pybrat.BratAnnotations.from_file(annfile)
+        pmid = os.path.splitext(os.path.basename(annfile))[0]
+        for event in anns.events:
+            subj = event.spans[1]
+            pred = event.spans[0]
+            obj = event.spans[2]
+            key = (pmid, subj.text, subj.start_index, subj.end_index,
+                   pred.type, pred.start_index, pred.end_index,
+                   obj.text, obj.start_index, obj.end_index)
+            all_anns.add(key)
+    return all_anns
 
 
 def query_sentences(db_conn, pmids):
@@ -262,16 +348,16 @@ def get_brat_event_from_row(row, semtype_map,
     attr = pybrat.Attribute(f"A{num_attrs}", row.INDICATOR_TYPE,
                             _type="indicatorType")
     num_attrs += 1
-    pred = pybrat.Span(f"T{num_spans}", row.PREDICATE_START_INDEX,
-                       row.PREDICATE_END_INDEX, pred_text, _type=row.PREDICATE,
-                       attributes={"indicatorType": attr})
+    indices = [(row.PREDICATE_START_INDEX, row.PREDICATE_END_INDEX)]
+    pred = pybrat.Span(f"T{num_spans}", indices, pred_text,
+                       _type=row.PREDICATE, attributes={"indicatorType": attr})
     num_spans += 1
     long_subj_semtype = semtype_map[row.SUBJECT_SEMTYPE]
     subj_cui_attr = pybrat.Attribute(f"A{num_attrs}", row.SUBJECT_CUI,
                                      _type="CUI")
     num_attrs += 1
-    subj = pybrat.Span(f"T{num_spans}", row.SUBJECT_START_INDEX,
-                       row.SUBJECT_END_INDEX, row.SUBJECT_TEXT,
+    indices = [(row.SUBJECT_START_INDEX, row.SUBJECT_END_INDEX)]
+    subj = pybrat.Span(f"T{num_spans}", indices, row.SUBJECT_TEXT,
                        _type=long_subj_semtype,
                        attributes={"cui": subj_cui_attr})
     num_spans += 1
@@ -279,10 +365,9 @@ def get_brat_event_from_row(row, semtype_map,
     obj_cui_attr = pybrat.Attribute(f"A{num_attrs}", row.OBJECT_CUI,
                                     _type="CUI")
     num_attrs += 1
-    obj = pybrat.Span(f"T{num_spans}", row.OBJECT_START_INDEX,
-                      row.OBJECT_END_INDEX, row.OBJECT_TEXT,
-                      _type=long_obj_semtype,
-                      attributes={"cui": obj_cui_attr})
+    indices = [(row.OBJECT_START_INDEX, row.OBJECT_END_INDEX)]
+    obj = pybrat.Span(f"T{num_spans}", indices, row.OBJECT_TEXT,
+                      _type=long_obj_semtype, attributes={"cui": obj_cui_attr})
     num_spans += 1
     event = pybrat.Event(f"E{num_events}", pred, subj, obj,
                          _type=pred.type, _source_file=f"{row.PMID}.ann")

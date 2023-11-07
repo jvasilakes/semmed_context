@@ -26,9 +26,16 @@ def main(args):
 
     saved_answers = None
     if args.saved_answers is not None:
+        saved_answers = {}
         with open(args.saved_answers, 'r') as inF:
             reader = csv.reader(inF)
-            saved_answers = dict(reader)
+            for row in reader:
+                if len(row) == 3:
+                    eid, lab, ans = row
+                    saved_answers[eid] = (lab, ans)
+                else:
+                    eid, ans = row
+                    saved_answers[eid] = ans
 
     writemode = 'a'
     if args.review is True:
@@ -127,7 +134,7 @@ def display(stdscr, dataset, outdir, task, saved_answers=None, review=False):
         if prev_answer is not None:
             stdscr.addstr(f"\nPrevious answer: {prev_answer}\n")
 
-        stdscr.addstr("Correct? [y]es / [n]o / [q]uit: ")
+        stdscr.addstr("Correct? [y]es / [n]o / [p]redicate incorrect / [q]uit: ")
         stdscr.refresh()
 
         while True:
@@ -136,12 +143,13 @@ def display(stdscr, dataset, outdir, task, saved_answers=None, review=False):
                 stdscr.addstr(chr(k))
                 stdscr.refresh()
                 return answers
-            elif chr(k) in ['y', 'n']:
+            elif chr(k) in ['y', 'n', 'p']:
                 stdscr.addstr(chr(k))
                 stdscr.refresh()
                 k2 = stdscr.getch()
+                lab = example["json"]["labels"][task]
                 if k2 == 10:  # Enter/Return key
-                    answers[example_id] = chr(k)
+                    answers[example_id] = (lab, chr(k))
                     current_buf_idx = increment_buffer(current_buf_idx, buffer)
                     break
                 else:
@@ -200,24 +208,31 @@ def display_annotation_task(stdscr, example, task):
     pred = example["json"]["labels"]["Predicate"]
     pred = pred.split('_')
     lab = example["json"]["labels"][task]
-    if task == "Polarity":
-        if lab == "Negative":
-            pred = "does not " + ' '.join([t.rstrip('SD') for t in pred])
-    elif task == "Certainty":
-        if lab == "Uncertain":
-            pred = "maybe " + ' '.join(pred)
+    fact_lab = example["json"]["labels"]["Factuality"]
+    if fact_lab == "Probable":
+        pred = "probably " + ' '.join(pred)
+    elif fact_lab == "Possible":
+        pred = "maybe " + ' '.join(pred)
+    elif fact_lab == "Doubtful":
+        pred = "might not " + ' '.join([t.rstrip('SD') for t in pred])
+    elif fact_lab == "Counterfact":
+        pred = "does not " + ' '.join([t.rstrip('SD') for t in pred])
+    else:
+        pred = ' '.join(pred)
     stdscr.addstr(subj, curses.color_pair(1) | curses.A_BOLD)
     stdscr.addstr(' ' + pred + ' ', curses.A_BOLD)
     stdscr.addstr(obj, curses.color_pair(2) | curses.A_BOLD)
     stdscr.addstr("\n")
+    stdscr.addstr(f"Label: {lab}")
+    stdscr.addstr("\n\n")
 
 
 def save_and_quit(answers, outfile, writemode='w'):
     with open(outfile, writemode) as outF:
         writer = csv.writer(outF, delimiter=',')
         print(f"Saving to {outfile}")
-        for (example_id, ans) in answers.items():
-            writer.writerow([example_id, ans])
+        for (example_id, (lab, ans)) in answers.items():
+            writer.writerow([example_id, lab, ans])
 
 
 if __name__ == "__main__":

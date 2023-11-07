@@ -211,7 +211,10 @@ class SemRepFactDataset(object):
             anns = pybrat.BratAnnotations.from_file(annfile)
             anntxt = pybrat.BratText.from_files(sentences=jsonfile)
             for event in anns.events:
-                sentence = anntxt.sentences(annotations=event)[0]
+                try:
+                    sentence = anntxt.sentences(annotations=event)[0]
+                except:
+                    continue
                 pred, subj, obj = event.spans
                 subj = (subj.text,
                         subj.start_index - sentence["start_char"],

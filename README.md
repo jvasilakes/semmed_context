@@ -131,5 +131,5 @@ find filtered_outdir/ -name '*.json' -exec ln -s {} factuality_outdir/converted/
 6. Finally, the data can be summarized with 
 
 ```
-python scripts/summarize_semrep_data.py factuality_outdir/converted/
+python scripts/summarize_semrep_ann.py factuality_outdir/converted/
 ```

@@ -15,7 +15,7 @@ import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader, Subset
 from transformers import AutoTokenizer
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
 
 sys.path.append("assets/filtering/src")
 from model import PubMedBERT  # noqa
@@ -219,6 +219,10 @@ def run_evaluation(model, dataloader, verbose=False):
         print("Confusion Matrix")
         print_confusion_matrix(cm)
     accuracy = (all_preds == all_labs).mean()
+    p, r, f, _ = precision_recall_fscore_support(all_labs, all_preds)
+    print("P: ", p)
+    print("R: ", r)
+    print("F: ", f)
     return torch.as_tensor(losses).mean().item(), accuracy.item()
 
 
@@ -237,6 +241,7 @@ def reannotate(model, dataloader, raw_examples, task, datadir, label_set):
         raise ValueError(f"Only binary labels are supported! Got '{label_set}'.")  # noqa
     os.rename(datadir, f"{datadir}.orig")
     reannotated = 0
+    corrected = 0
     with tarfile.open(datadir, "w:gz") as tarF:
         for (eid, example) in raw_examples.items():
             try:
@@ -251,11 +256,26 @@ def reannotate(model, dataloader, raw_examples, task, datadir, label_set):
                 bad_label = raw_examples[eid]["labels"][task]
                 fixed_label = list(label_set - set([bad_label]))[0]
                 raw_examples[eid]["labels"][task] = fixed_label
+            fact_labels = get_factuality_label(raw_examples[eid])
+            if raw_examples[eid]["labels"]["Factuality"] not in fact_labels:
+                raw_examples[eid]["labels"]["Factuality"] = fact_labels[0]
+                corrected += 1
             data = json.dumps(raw_examples[eid]).encode()
             info = tarfile.TarInfo(name=f"{eid}.json")
             info.size = len(data)
             tarF.addfile(info, io.BytesIO(data))
     print(f"Reannotated {reannotated} samples.")
+    print(f"Corrected {corrected} Factuality labels.")
+
+
+def get_factuality_label(example):
+    fact_map = {("Certain", "Positive"): ["Fact"],
+                ("Certain", "Negative"): ["Counterfact"],
+                ("Uncertain", "Positive"): ["Possible", "Probable"],
+                ("Uncertain", "Negative"): ["Doubtful"]}
+    neg = example["labels"]["Polarity"]
+    cert = example["labels"]["Certainty"]
+    return fact_map[(cert, neg)]
 
 
 def load_raw_examples(datadir):
@@ -277,7 +297,11 @@ def load_data(raw_examples, task, labelfile=None, keep_label=None):
     labels = defaultdict(lambda: -1)
     if labelfile is not None:
         labels = pd.read_csv(labelfile, index_col=0, header=None)
-        labels = pd.get_dummies(labels[1])
+        label_col = 1
+        if labels.shape[1] == 2:
+            label_col = 2
+        labels = labels[labels[label_col] != -1]  # rm incorrect predicates
+        labels = pd.get_dummies(labels[label_col])
         labels = labels.drop(columns='n').to_dict()['y']
     examples = {}
     for (eid, example) in raw_examples:
