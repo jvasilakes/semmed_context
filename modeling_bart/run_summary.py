@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from config_summary import config
-from vae.data import SemRepFactDataModule, ConceptNetDataModule
+from vae.data import SemRepFactDataModule
 from vae.models import MODEL_REGISTRY
 
 
@@ -79,7 +79,6 @@ def run_train(config, quiet=False):
     version_str = f"version_{version}/seed_{seed}"
     version_dir = os.path.join(logdir, exp_name, version_str)
 
-    # datamodule = ConceptNetDataModule(config)
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
@@ -104,7 +103,7 @@ def run_train(config, quiet=False):
     filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
         monitor="val_loss_no_kl", mode="min", filename=filename_fmt)
-        #monitor="train_recon_loss", mode="min", filename=filename_fmt)
+        # monitor="train_recon_loss", mode="min", filename=filename_fmt)
     lr_cb = LearningRateMonitor(logging_interval="step")
 
     if torch.cuda.is_available():
@@ -132,9 +131,17 @@ def run_validate(config, datasplit, quiet=False):
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
     ckpt_path, hparams_path = find_model_checkpoint(config)
-    model = model_class.load_from_checkpoint(
-        checkpoint_path=ckpt_path,
-        hparams_file=hparams_path)
+    #model = model_class.load_from_checkpoint(
+    #    checkpoint_path=ckpt_path,
+    #    hparams_file=hparams_path)
+    logdir = config.Experiment.logdir.value
+    version = config.Experiment.version.value
+    exp_name = config.Experiment.name.value
+    seed = config.Experiment.random_seed.value
+    version_str = f"version_{version}/seed_{seed}"
+    version_dir = os.path.join(logdir, exp_name, version_str)
+    model = model_class.from_config(
+        config, tasks_spec=datamodule.label_spec, logdir=version_dir)
     model.eval()
 
     if torch.cuda.is_available():
@@ -158,21 +165,27 @@ def run_validate(config, datasplit, quiet=False):
     else:
         raise ValueError(f"Unknown data split '{datasplit}'")
     val_dataloader = val_dataloader_fn()
-    results = trainer.validate(
-        model, dataloaders=val_dataloader, verbose=False)[0]
-    print(results)
+    trainer.validate(model, dataloaders=val_dataloader,
+                     verbose=False, ckpt_path=ckpt_path)[0]
 
 
 def run_predict(config, datasplit, quiet=False):
-    # datamodule = ConceptNetDataModule(config)
     datamodule = SemRepFactDataModule(config)
     datamodule.setup()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
     ckpt_path, hparams_path = find_model_checkpoint(config)
-    model = model_class.load_from_checkpoint(
-        checkpoint_path=ckpt_path,
-        hparams_file=hparams_path)
+    #model = model_class.load_from_checkpoint(
+    #    checkpoint_path=ckpt_path,
+    #    hparams_file=hparams_path)
+    logdir = config.Experiment.logdir.value
+    version = config.Experiment.version.value
+    exp_name = config.Experiment.name.value
+    seed = config.Experiment.random_seed.value
+    version_str = f"version_{version}/seed_{seed}"
+    version_dir = os.path.join(logdir, exp_name, version_str)
+    model = model_class.from_config(
+        config, tasks_spec=datamodule.label_spec, logdir=version_dir)
     model.eval()
 
     if torch.cuda.is_available():
@@ -197,7 +210,7 @@ def run_predict(config, datasplit, quiet=False):
         raise ValueError(f"Unknown data split '{datasplit}'")
     predict_dataloader = predict_dataloader_fn()
     preds = trainer.predict(
-        model, dataloaders=predict_dataloader)
+        model, dataloaders=predict_dataloader, ckpt_path=ckpt_path)
 
     preddir = os.path.join(
         config.Experiment.logdir.value,

@@ -2,6 +2,7 @@ import torch
 import torch.distributions as D
 
 
+import sle
 from ..util import register_distribution
 from .helpers import Kumaraswamy, StretchedAndRectifiedDistribution
 
@@ -12,10 +13,10 @@ class Normal(D.Normal):
     discrete = False
 
     def __init__(self, params: torch.FloatTensor, **kwargs):
-        mu, logvar = params.chunk(2, dim=-1)
-        var = torch.exp(logvar)
-        self.parameters = {"mu": mu, "var": var}
-        super().__init__(mu, var)
+        loc, scale = params.chunk(2, dim=-1)
+        scale = torch.exp(scale)
+        self.parameters = {"loc": loc, "scale": scale}
+        super().__init__(loc, scale)
 
     def kl_loss(self):
         standard_dist = D.Normal(0, 1)
@@ -98,3 +99,42 @@ class GumbelSoftmax(object):
         # Scale kl by number of dims otherwise it takes over and
         # suppresses the content latent.
         return kl_divergence.mean(0).sum() / self.alphas.size(-1)
+
+
+@register_distribution("sle-beta")
+class SLBeta(sle.SLBeta):
+    """
+    Beta distribution reparameterized to use (b)elief, (d)isbelief,
+    and (u)ncertainty parameters as described in Subjective Logic.
+    """
+    num_params = 3
+    discrete = True
+
+    def __init__(self, params: torch.FloatTensor, **kwargs):
+        # softmax() to ensure params are positive and b + d + u = 1
+        b, d, u = params.softmax(-1).chunk(3, dim=-1)
+        self.parameters = {'b': b, 'd': d, 'u': u}
+        super().__init__(b, d, u)
+
+    def kl_loss(self):
+        standard_dist = sle.SLBeta(0.0, 0.0, 1.0)
+        return D.kl_divergence(self, standard_dist).mean(0).sum()
+
+
+@register_distribution("sle-dirichlet")
+class SLDirichlet(sle.SLDirichlet):
+    """
+    Dirichlet distribution reparameterized to use (b)elief and (u)ncertainty
+    parameters as described in Subjective Logic.
+    """
+    num_params = 1
+    discrete = True
+
+    def __init__(self, params: torch.FloatTensor, **kwargs):
+        b, u = params.softmax(-1).tensor_split([-1], dim=-1)
+        self.parameters = {'b': b, 'u': u}
+        super().__init__(b, u)
+
+    def kl_loss(self):
+        standard_dist = sle.SLDirichlet(torch.zeros_like(self.b), 1.0)
+        return D.kl_divergence(self, standard_dist).mean(0).sum()

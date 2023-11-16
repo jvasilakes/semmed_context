@@ -33,11 +33,15 @@ class BartVAEEncoder(BartEncoder):
             self.latent_structure[latent_name][1] = dist
             # x2 for each entity mention
             indim = 2 * hidden_size
+            outdim = latent_dim * dist.num_params
+            if dist_name == "sle-dirichlet":
+                outdim = latent_dim + 1
             self.context2params[latent_name] = nn.Linear(
-                    indim, latent_dim * dist.num_params)  # x2 for mu, logvar
+                    indim, outdim)
             total_latent_dim += latent_dim
             if latent_name in self.tasks_spec.keys():
                 # For HardKuma and GumbelSoftmax, just take the value itself.
+                # TODO: discrete is the wrong word.
                 if dist.discrete is True:
                     disc = nn.Identity()
                 else:

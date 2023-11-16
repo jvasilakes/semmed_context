@@ -65,23 +65,25 @@ class AbstractBartSummaryModel(pl.LightningModule):
                 task_loss = outputs.task_losses[key]
                 total_loss += task_loss
                 self.log(f"train_task_loss_{key}", task_loss)
-        return {"loss": total_loss,
+        return {"__key__": batch["__key__"],
+                "loss": total_loss,
                 "latent_params": outputs.latent_params,
                 "task_logits": outputs.task_logits,
                 "task_labels": batch["json"]["labels"]}
 
     def training_epoch_end(self, metrics):
         loss_vals = []
+        epoch_ids = []
         epoch_zs = defaultdict(list)
         epoch_params = defaultdict(list)
         task_preds = defaultdict(list)
         task_labels = defaultdict(list)
         for batch in metrics:
             loss_vals.append(batch["loss"].detach().cpu().numpy())
+            epoch_ids.extend(batch["__key__"])
             for (latent, params) in batch["latent_params"].items():
                 param_vals = {k: v.detach().cpu().squeeze().tolist()
                               for (k, v) in params.parameters.items()}
-                param_vals = [v for (k, v) in sorted(param_vals.items(), key=lambda x: x[0])]
                 epoch_params[latent].append(param_vals)
                 epoch_zs[latent].extend(
                     params.rsample().detach().cpu().tolist())
@@ -101,6 +103,9 @@ class AbstractBartSummaryModel(pl.LightningModule):
             self.log(f"train_recall_{task}", r)
 
         if self.logdir is not None:
+            ids_outfile = f"{self.logdir}/metadata/ids_{self.epoch}.json"
+            with open(ids_outfile, 'w') as outF:
+                json.dump(epoch_ids, outF)
             params_outfile = f"{self.logdir}/metadata/params_{self.epoch}.json"
             with open(params_outfile, 'w') as outF:
                 json.dump(dict(epoch_params), outF)

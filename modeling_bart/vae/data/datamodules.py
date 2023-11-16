@@ -14,7 +14,7 @@ class SemRepFactDataModule(pl.LightningDataModule):
         self.config = config
         self._ran_setup = False
 
-    def setup(self):
+    def setup(self, stage=None):
         self.dataset = SemRepFactDataset.from_config(self.config)
         self.label_spec = self.dataset.label_spec
         self.batch_size = self.config.Training.batch_size.value
@@ -51,7 +51,7 @@ class ConceptNetDataModule(pl.LightningDataModule):
         self.config = config
         self._ran_setup = False
 
-    def setup(self):
+    def setup(self, stage=None):
         self.dataset = ConceptNetDataset.from_config(self.config)
         self.label_spec = self.dataset.label_spec
         self.batch_size = self.config.Training.batch_size.value
