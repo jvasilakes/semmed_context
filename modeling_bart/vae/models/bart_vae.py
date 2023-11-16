@@ -47,7 +47,12 @@ class BartVAEEncoder(BartEncoder):
                 else:
                     # Otherwise, project from the distribution to logits.
                     outdim = self.tasks_spec[latent_name]
-                    disc = nn.Linear(latent_dim, outdim)
+                    if outdim == 1:
+                        transform = nn.Sigmoid()
+                    else:
+                        transform = nn.Softmax(-1)
+                    disc = nn.Sequential(
+                            nn.Linear(latent_dim, outdim), transform)
                 self.discriminators[latent_name] = disc
         self.z2hidden = nn.Linear(total_latent_dim, hidden_size)
 
@@ -329,7 +334,7 @@ class BartVAEForConditionalGeneration(BartForConditionalGeneration):
                             ex_weights = weights[task_labels[task]]
                         else:
                             ex_weights = None
-                        task_losses[task] = F.binary_cross_entropy_with_logits(
+                        task_losses[task] = F.binary_cross_entropy(
                             logits, task_labels[task].float(),
                             weight=ex_weights)
                     else:

@@ -89,7 +89,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
                     params.rsample().detach().cpu().tolist())
             for (task, logits) in batch["task_logits"].items():
                 if logits.dim() == 1:
-                    preds = (torch.sigmoid(logits) >= 0.5).long()
+                    preds = (logits >= 0.5).long()
                 else:
                     preds = logits.argmax(-1)
                 labels = batch["task_labels"][task].cpu().tolist()
