@@ -117,7 +117,7 @@ class SLBeta(sle.SLBeta):
         super().__init__(b, d, u)
 
     def kl_loss(self):
-        standard_dist = sle.SLBeta(0.0, 0.0, 1.0)
+        standard_dist = sle.SLBeta(0.0, 0.0, 1.0).to(self.b.device)
         return D.kl_divergence(self, standard_dist).mean(0).sum()
 
 
@@ -136,5 +136,7 @@ class SLDirichlet(sle.SLDirichlet):
         super().__init__(b, u)
 
     def kl_loss(self):
-        standard_dist = sle.SLDirichlet(torch.zeros_like(self.b), 1.0)
+        loc = torch.zeros_like(self.b)
+        scale = torch.ones((loc.size(0),)).to(loc.device)
+        standard_dist = sle.SLDirichlet(loc, scale)
         return D.kl_divergence(self, standard_dist).mean(0).sum()
