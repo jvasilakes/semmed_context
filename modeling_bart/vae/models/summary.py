@@ -29,13 +29,13 @@ class AbstractBartSummaryModel(pl.LightningModule):
                    logdir=logdir)
 
     def __init__(self, bart_model_name_or_path, lr=2e-5,
-                 weight_decay=0.0, logdir=None):
+                 weight_decay=0.0, logdir=None, epoch=0):
         super().__init__()
         self.bart_model_name_or_path = bart_model_name_or_path
         self.lr = lr
         self.weight_decay = weight_decay
         self.bart = None
-        self.epoch = 0
+        self.epoch = epoch
         # TODO: add KL weights to config
         self.kl_weight = 0.001
 
@@ -67,26 +67,15 @@ class AbstractBartSummaryModel(pl.LightningModule):
                 self.log(f"train_task_loss_{key}", task_loss)
         return {"__key__": batch["__key__"],
                 "loss": total_loss,
-                "latent_params": outputs.latent_params,
                 "task_logits": outputs.task_logits,
                 "task_labels": batch["json"]["labels"]}
 
     def training_epoch_end(self, metrics):
         loss_vals = []
-        epoch_ids = []
-        epoch_zs = defaultdict(list)
-        epoch_params = defaultdict(list)
         task_preds = defaultdict(list)
         task_labels = defaultdict(list)
         for batch in metrics:
             loss_vals.append(batch["loss"].detach().cpu().numpy())
-            epoch_ids.extend(batch["__key__"])
-            for (latent, params) in batch["latent_params"].items():
-                param_vals = {k: v.detach().cpu().squeeze().tolist()
-                              for (k, v) in params.parameters.items()}
-                epoch_params[latent].append(param_vals)
-                epoch_zs[latent].extend(
-                    params.rsample().detach().cpu().tolist())
             for (task, logits) in batch["task_logits"].items():
                 if logits.dim() == 1:
                     preds = (logits >= 0.5).long()
@@ -102,19 +91,6 @@ class AbstractBartSummaryModel(pl.LightningModule):
             self.log(f"train_precision_{task}", p)
             self.log(f"train_recall_{task}", r)
 
-        if self.logdir is not None:
-            ids_outfile = f"{self.logdir}/metadata/ids_{self.epoch}.json"
-            with open(ids_outfile, 'w') as outF:
-                json.dump(epoch_ids, outF)
-            params_outfile = f"{self.logdir}/metadata/params_{self.epoch}.json"
-            with open(params_outfile, 'w') as outF:
-                json.dump(dict(epoch_params), outF)
-            z_outfile = f"{self.logdir}/metadata/z_{self.epoch}.json"
-            with open(z_outfile, 'w') as outF:
-                json.dump(dict(epoch_zs), outF)
-            labels_outfile = f"{self.logdir}/metadata/labels_{self.epoch}.json"
-            with open(labels_outfile, 'w') as outF:
-                json.dump(dict(task_labels), outF)
         self.epoch += 1
 
     def validation_step(self, batch, batch_idx):
@@ -137,7 +113,8 @@ class AbstractBartSummaryModel(pl.LightningModule):
                 preds = logits.argmax(-1)
             preds = preds.detach().cpu().tolist()
             task_preds[task] = preds
-        metrics = {"recon_loss": outputs.loss.detach().cpu().item(),
+        metrics = {"__key__": batch["__key__"],
+                   "recon_loss": outputs.loss.detach().cpu().item(),
                    "task_losses": {key: loss.detach().cpu().item()
                                    for (key, loss) in outputs.task_losses.items()},  # noqa
                    "kls": {key: kl.detach().cpu().item()
@@ -146,7 +123,9 @@ class AbstractBartSummaryModel(pl.LightningModule):
                    "token_labels": batch["json"]["encoded"]["labels"],
                    "task_preds": task_preds,
                    "task_labels": {key: labs.cpu().tolist() for (key, labs)
-                                   in batch["json"]["labels"].items()}
+                                   in batch["json"]["labels"].items()},
+                   "latent_params": {key: dist for (key, dist)
+                                     in outputs.latent_params.items()}
                    }
         return metrics
 
@@ -158,16 +137,26 @@ class AbstractBartSummaryModel(pl.LightningModule):
         token_labels = []
         task_preds = defaultdict(list)
         task_labels = defaultdict(list)
-        for ex in all_metrics:
-            recon_losses.append(ex["recon_loss"])
-            for (latent, kl) in ex["kls"].items():
+        epoch_ids = []
+        epoch_zs = defaultdict(list)
+        epoch_params = defaultdict(list)
+        for batch in all_metrics:
+            recon_losses.append(batch["recon_loss"])
+            for (latent, kl) in batch["kls"].items():
                 latent_kls[latent].append(kl)
-            for (task, loss) in ex["task_losses"].items():
+            for (task, loss) in batch["task_losses"].items():
                 task_losses[task].append(loss)
-                task_preds[task].extend(ex["task_preds"][task])
-                task_labels[task].extend(ex["task_labels"][task])
-            token_preds.append(ex["token_preds"])
-            token_labels.append(ex["token_labels"])
+                task_preds[task].extend(batch["task_preds"][task])
+                task_labels[task].extend(batch["task_labels"][task])
+            epoch_ids.extend(batch["__key__"])
+            for (latent, params) in batch["latent_params"].items():
+                param_vals = {k: v.detach().cpu().squeeze().tolist()
+                              for (k, v) in params.parameters.items()}
+                epoch_params[latent].append(param_vals)
+                epoch_zs[latent].extend(
+                    params.rsample().detach().cpu().tolist())
+            token_preds.append(batch["token_preds"])
+            token_labels.append(batch["token_labels"])
         self.log("val_recon_loss", np.mean(recon_losses))
         for (latent, kls) in latent_kls.items():
             self.log(f"val_kl_{latent}", np.mean(kls))
@@ -183,6 +172,20 @@ class AbstractBartSummaryModel(pl.LightningModule):
                 task_labels[task], preds, average="macro", zero_division=0)
             self.log(f"val_precision_{task}", p)
             self.log(f"val_recall_{task}", r)
+
+        if self.logdir is not None:
+            ids_outfile = f"{self.logdir}/metadata/ids_{self.epoch}.json"
+            with open(ids_outfile, 'w') as outF:
+                json.dump(epoch_ids, outF)
+            params_outfile = f"{self.logdir}/metadata/params_{self.epoch}.json"
+            with open(params_outfile, 'w') as outF:
+                json.dump(dict(epoch_params), outF)
+            z_outfile = f"{self.logdir}/metadata/z_{self.epoch}.json"
+            with open(z_outfile, 'w') as outF:
+                json.dump(dict(epoch_zs), outF)
+            labels_outfile = f"{self.logdir}/metadata/labels_{self.epoch}.json"
+            with open(labels_outfile, 'w') as outF:
+                json.dump(dict(task_labels), outF)
 
     def predict_step(self, batch, batch_idx):
         outputs = self.get_model_outputs(batch)
