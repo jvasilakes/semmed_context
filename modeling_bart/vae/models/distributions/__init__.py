@@ -102,7 +102,7 @@ class GumbelSoftmax(object):
 
 
 @register_distribution("sle-beta")
-class SLBeta(sle.SLBeta):
+class SLEBeta(sle.SLBeta):
     """
     Beta distribution reparameterized to use (b)elief, (d)isbelief,
     and (u)ncertainty parameters as described in Subjective Logic.
@@ -122,7 +122,7 @@ class SLBeta(sle.SLBeta):
 
 
 @register_distribution("sle-dirichlet")
-class SLDirichlet(sle.SLDirichlet):
+class SLEDirichlet(sle.SLDirichlet):
     """
     Dirichlet distribution reparameterized to use (b)elief and (u)ncertainty
     parameters as described in Subjective Logic.
