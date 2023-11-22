@@ -107,6 +107,7 @@ def run_train(config, quiet=False):
 
     filename_fmt = f"{{epoch:02d}}"  # noqa F541 f-string is missing placeholders
     checkpoint_cb = ModelCheckpoint(
+        dirpath=os.path.join(version_dir, "checkpoints"),
         monitor="val_loss_no_kl", mode="min", filename=filename_fmt)
     lr_cb = LearningRateMonitor(logging_interval="step")
 
