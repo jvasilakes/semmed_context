@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import argparse
 import warnings
@@ -83,10 +84,13 @@ def run_train(config, quiet=False):
     datamodule.setup()
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
+    epoch = 0
     ckpt_path = None
     if os.path.exists(version_dir):
         try:
             ckpt_path, hparams_path = find_model_checkpoint(config)
+            epoch = int(re.match(r'.*\=([0-9]+)\.ckpt', ckpt_path).group(1))
+            epoch += 1
         except OSError:
             raise OSError(f"Version dir already exists at {version_dir}, but no checkpoint found!")  # noqa
         finally:
@@ -94,7 +98,8 @@ def run_train(config, quiet=False):
     os.makedirs(version_dir, exist_ok=True)
     config.yaml(outpath=os.path.join(version_dir, "config.yaml"))
     model = model_class.from_config(
-        config, tasks_spec=datamodule.label_spec, logdir=version_dir)
+        config, tasks_spec=datamodule.label_spec, logdir=version_dir,
+        epoch=epoch)
     model.train()
 
     logger = TensorBoardLogger(
@@ -130,6 +135,7 @@ def run_validate(config, datasplit, quiet=False):
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
     ckpt_path, hparams_path = find_model_checkpoint(config)
+    epoch = int(re.match(r'.*\=([0-9]+)\.ckpt', ckpt_path).group(1))
     #model = model_class.load_from_checkpoint(
     #    checkpoint_path=ckpt_path,
     #    hparams_file=hparams_path)
@@ -140,7 +146,8 @@ def run_validate(config, datasplit, quiet=False):
     version_str = f"version_{version}/seed_{seed}"
     version_dir = os.path.join(logdir, exp_name, version_str)
     model = model_class.from_config(
-        config, tasks_spec=datamodule.label_spec, logdir=version_dir)
+        config, tasks_spec=datamodule.label_spec, logdir=version_dir,
+        epoch=epoch)
     model.eval()
 
     if torch.cuda.is_available():
@@ -174,6 +181,7 @@ def run_predict(config, datasplit, quiet=False):
 
     model_class = MODEL_REGISTRY[config.Model.model_name.value]
     ckpt_path, hparams_path = find_model_checkpoint(config)
+    epoch = int(re.match(r'.*\=([0-9]+)\.ckpt', ckpt_path).group(1))
     #model = model_class.load_from_checkpoint(
     #    checkpoint_path=ckpt_path,
     #    hparams_file=hparams_path)
@@ -184,7 +192,8 @@ def run_predict(config, datasplit, quiet=False):
     version_str = f"version_{version}/seed_{seed}"
     version_dir = os.path.join(logdir, exp_name, version_str)
     model = model_class.from_config(
-        config, tasks_spec=datamodule.label_spec, logdir=version_dir)
+        config, tasks_spec=datamodule.label_spec, logdir=version_dir,
+        epoch=epoch)
     model.eval()
 
     if torch.cuda.is_available():

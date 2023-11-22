@@ -3,7 +3,6 @@ import json
 from copy import deepcopy
 from collections import defaultdict
 
-import torch
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim import AdamW
@@ -26,7 +25,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
         return cls(config.Model.bart_model_name_or_path.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
-                   logdir=logdir)
+                   logdir=logdir, **kwargs)
 
     def __init__(self, bart_model_name_or_path, lr=2e-5,
                  weight_decay=0.0, logdir=None, epoch=0):
@@ -77,6 +76,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
         for batch in metrics:
             loss_vals.append(batch["loss"].detach().cpu().numpy())
             for (task, logits) in batch["task_logits"].items():
+                # TODO: Use distribution.predict() method
                 if logits.dim() == 1:
                     preds = (logits >= 0.5).long()
                 else:
@@ -108,6 +108,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
         task_preds = {}
         for (task, logits) in outputs.task_logits.items():
             if logits.dim() == 1:
+                # TODO: use distribution.predict() method
                 preds = (logits >= 0.5).long()
             else:
                 preds = logits.argmax(-1)
@@ -198,6 +199,7 @@ class AbstractBartSummaryModel(pl.LightningModule):
         batch_cp["json"]["tasks"] = {}
         for (task, logits) in outputs.task_logits.items():
             if logits.dim() == 1:
+                # TODO: use distribution.predict() method
                 preds = (logits >= 0.5).long()
             else:
                 preds = logits.argmax(-1)
@@ -226,19 +228,20 @@ class BartSummaryModel(AbstractBartSummaryModel):
 class BartVAESummaryModel(AbstractBartSummaryModel):
 
     @classmethod
-    def from_config(cls, config, logdir=None, tasks_spec=None):
+    def from_config(cls, config, logdir=None, tasks_spec=None, **kwargs):
         return cls(config.Model.bart_model_name_or_path.value,
                    latent_structure=config.Model.latent_structure.value,
                    tasks_spec=tasks_spec,
                    label_weights=config.Data.label_weights.value,
                    lr=config.Training.lr.value,
                    weight_decay=config.Training.weight_decay.value,
-                   logdir=logdir)
+                   logdir=logdir, **kwargs)
 
     def __init__(self, bart_model_name_or_path, latent_structure,
                  tasks_spec=None, label_weights=None,
-                 lr=2e-5, weight_decay=0.0, logdir=None):
-        super().__init__(bart_model_name_or_path, lr, weight_decay, logdir)
+                 lr=2e-5, weight_decay=0.0, logdir=None, epoch=0):
+        super().__init__(bart_model_name_or_path, lr, weight_decay, logdir,
+                         epoch=epoch)
         self.latent_structure = latent_structure
         self.bart = BartVAEForConditionalGeneration.from_pretrained(
             self.bart_model_name_or_path, latent_structure=latent_structure,
