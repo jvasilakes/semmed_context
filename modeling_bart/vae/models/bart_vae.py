@@ -69,7 +69,7 @@ class BartVAEEncoder(BartEncoder):
         hidden_states = encoder_outputs.last_hidden_state
         # TODO: remove hard coded entity start id
         entity_mask = input_ids.eq(50128).to(hidden_states.device)
-        #entity_mask = input_ids.eq(2).to(hidden_states.device)
+        # entity_mask = input_ids.eq(2).to(hidden_states.device)
         if len(torch.unique_consecutive(entity_mask.sum(1))) > 1:
             raise ValueError("All examples must have the same number of entity_start tokens.")  # noqa
         entity_reps = hidden_states[entity_mask, :].view(
@@ -117,7 +117,7 @@ class BartVAEEncoder(BartEncoder):
             layer = self.context2params[latent_name]
             params = layer(context)
             dist_cls = self.latent_structure[latent_name][1]
-            dist = dist_cls(params)
+            dist = dist_cls.from_bunched_params(params)
             latent_dists[latent_name] = dist
         return latent_dists
 

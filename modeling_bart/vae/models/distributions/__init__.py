@@ -12,15 +12,25 @@ class Normal(D.Normal):
     num_params = 2
     discrete = False
 
-    def __init__(self, params: torch.FloatTensor, **kwargs):
+    @classmethod
+    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
         loc, scale = params.chunk(2, dim=-1)
         scale = torch.exp(scale)
+        return cls(loc, scale)
+
+    def __init__(self, loc, scale):
         self.parameters = {"loc": loc, "scale": scale}
         super().__init__(loc, scale)
 
     def kl_loss(self):
         standard_dist = D.Normal(0, 1)
         return D.kl_divergence(self, standard_dist).mean(0).sum()
+
+    def predict(self):
+        if self.loc.dim() == 1:
+            return (self.rsample().sigmoid() >= 0.5).long()
+        else:
+            return self.rsample().argmax(1)
 
 
 @register_distribution("hardkuma")
@@ -33,8 +43,12 @@ class HardKumaraswamy(StretchedAndRectifiedDistribution):
     discrete = True
     arg_constraints = {}
 
-    def __init__(self, params: torch.FloatTensor, **kwargs):
+    @classmethod
+    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
         a, b = params.chunk(2, dim=-1)
+        return cls(a, b)
+
+    def __init__(self, a, b):
         self.a = torch.exp(a)
         self.b = torch.exp(b)
         self.parameters = {'a': self.a, 'b': self.b}
@@ -57,6 +71,9 @@ class HardKumaraswamy(StretchedAndRectifiedDistribution):
         kl = -(self.kuma.entropy() - constant)
         return kl.mean(0).sum()
 
+    def predict(self):
+        return (self.rsample() >= 0.5).long()
+
 
 @register_distribution("gumbel-softmax")
 class GumbelSoftmax(object):
@@ -70,8 +87,12 @@ class GumbelSoftmax(object):
     eps = 1e-12
     temperature = 1.0  # Closer to 0 makes the distribution sparse.
 
-    def __init__(self, params: torch.FloatTensor):
-        self.alphas = params.exp()
+    @classmethod
+    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
+        alphas = params.exp()
+        return cls(alphas)
+
+    def __init__(self, alphas):
         self.parameters = {"alphas": self.alphas}
 
     def rsample(self, size=None):
@@ -100,6 +121,9 @@ class GumbelSoftmax(object):
         # suppresses the content latent.
         return kl_divergence.mean(0).sum() / self.alphas.size(-1)
 
+    def predict(self):
+        return self.rsample().argmax(1)
+
 
 @register_distribution("sle-beta")
 class SLEBeta(sle.SLBeta):
@@ -110,15 +134,22 @@ class SLEBeta(sle.SLBeta):
     num_params = 3
     discrete = True
 
-    def __init__(self, params: torch.FloatTensor, **kwargs):
+    @classmethod
+    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
         # softmax() to ensure params are positive and b + d + u = 1
         b, d, u = params.softmax(-1).chunk(3, dim=-1)
+        return cls(b, d, u)
+
+    def __init__(self, b, d, u):
         self.parameters = {'b': b, 'd': d, 'u': u}
         super().__init__(b, d, u)
 
     def kl_loss(self):
         standard_dist = sle.SLBeta(0.0, 0.0, 1.0).to(self.b.device)
         return D.kl_divergence(self, standard_dist).mean(0).sum()
+
+    def predict(self):
+        return (self.rsample() >= 0.5).long()
 
 
 @register_distribution("sle-dirichlet")
@@ -130,8 +161,12 @@ class SLEDirichlet(sle.SLDirichlet):
     num_params = 1
     discrete = True
 
-    def __init__(self, params: torch.FloatTensor, **kwargs):
+    @classmethod
+    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
         b, u = params.softmax(-1).tensor_split([-1], dim=-1)
+        return cls(b, u)
+
+    def __init__(self, b, u):
         self.parameters = {'b': b, 'u': u}
         super().__init__(b, u)
 
@@ -140,3 +175,6 @@ class SLEDirichlet(sle.SLDirichlet):
         scale = torch.ones((loc.size(0),)).to(loc.device)
         standard_dist = sle.SLDirichlet(loc, scale)
         return D.kl_divergence(self, standard_dist).mean(0).sum()
+
+    def predict(self):
+        return self.rsample().argmax(1)
