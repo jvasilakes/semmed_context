@@ -29,16 +29,18 @@ def main(driver, args):
         query = (
             "MERGE (p1:Entity {name: $subj_attrs.name, cui:$subj_attrs.cui}) "
             "MERGE (p2:Entity {name: $obj_attrs.name, cui:$obj_attrs.cui}) "
-            f"MERGE (p1)-[:{row.predicate} {{belief: $pred_attrs.belief, pmids: $pred_attrs.pmids}}]->(p2) "  # noqa
+            f"MERGE (p1)-[:{row.predicate} {{factuality: $pred_attrs.factuality, belief: $pred_attrs.belief, confidence: $pred_attrs.confidence, pmids: $pred_attrs.pmids}}]->(p2) "  # noqa
             "RETURN p1.name, p2.name"
             )
         subj_attrs = {"name": row.subj_text, "cui": row.subj_cui}
         obj_attrs = {"name": row.obj_text, "cui": row.obj_cui}
         triple_str = '_'.join([row.subj_cui, row.predicate, row.obj_cui])
 
-        slbeta = SLBeta(row.b, row.d, row.u).max_uncertainty()
-        belief = slbeta.b.item()
-        pred_attrs = {"pmids": pmids[triple_str], "belief": belief}
+        slbeta = SLBeta(row.b, row.d, row.u)
+        belief = slbeta.mode.item()  # most likely value under the Beta
+        confidence = slbeta.max_uncertainty().b.item()
+        pred_attrs = {"pmids": pmids[triple_str], "factuality": row.Factuality,
+                      "belief": belief, "confidence": confidence}
         driver.execute_query(
             query, database_="neo4j",
             subj_attrs=subj_attrs, obj_attrs=obj_attrs, pred_attrs=pred_attrs,

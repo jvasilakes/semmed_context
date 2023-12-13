@@ -60,12 +60,12 @@ def main(args):
 
 def compute_consensus(factualities):
     """
-    lab  value        b    d    u
-    0    Fact         1    0    0
-    1    Counterfact  0    1    0
-    2    Probable     0.6  0.2  0.2
-    3    Possible     0.2  0.2  0.6
-    4    Doubtful     0.2  0.6  0.2
+    lab  value        b     d     u
+    0    Fact         1     0     0
+    1    Counterfact  0     1     0
+    2    Probable     0.6   0.2   0.2
+    3    Possible     0.2   0.2   0.6
+    4    Doubtful     0.2   0.6   0.2
     """
     sle_map = {
         0: {'b': 1.0, 'd': 0.0, 'u': 0.0},
