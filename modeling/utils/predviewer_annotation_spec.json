@@ -1,0 +1,4 @@
+{
+	"task": "cue detection",
+	"fields": ["relevant", "irrelevant"]
+}
