@@ -1,9 +1,11 @@
+import os
 import re
 import json
 import random
 import argparse
 from collections import OrderedDict
 
+from hashlib import md5
 from flask import Flask
 from flask import request
 from dominate import document
@@ -22,8 +24,18 @@ def parse_args():
         "--num-examples", "-N", type=int, default=1000,
         help="Number of examples to load.")
     parser.add_argument(
+        "--example-keys", "-E", type=str, default=None,
+        help="A list of keys of examples to load, one per line.")
+    parser.add_argument(
         "--port", type=int, default=5000,
         help="Localhost port on which to serve the application.")
+    parser.add_argument(
+        "--annotation-spec", type=str, default=None,
+        help="""Path to a JSON file containing the annotation specifications.
+                If None, no annotation interface is rendered.""")
+    parser.add_argument(
+        "--annotation-answers", type=str, default="anns.json",
+        help="""Path to JSON file containing annotation answers to render.""")
     parser.add_argument(
         "--shuffle", default=False, action="store_true",
         help="If specified, shuffle the order of examples.")
@@ -36,8 +48,9 @@ def parse_args():
 def create_app(args):
     app = Flask(__name__)
     app.config["filename"] = args.filepath
-    app.config["data"] = load_data(args.filepath, shuffle=args.shuffle,
-                                   random_state=args.random_state)
+    app.config["data"] = load_data(
+        args.filepath, example_keys=args.example_keys,
+        shuffle=args.shuffle, random_state=args.random_state)
     app.config["state"] = OrderedDict({
         "collapse wordpiece": True,
         "rm_special_tokens": True,
@@ -45,10 +58,21 @@ def create_app(args):
         "incorrect": True,
         "max_examples": args.num_examples,
     })
+    ann_spec = None
+    ann_answers = None
+    if args.annotation_spec is not None:
+        ann_spec = json.load(open(args.annotation_spec))
+        ann_answers = {}
+        if os.path.isfile(args.annotation_answers):
+            ann_answers = json.load(open(args.annotation_answers))
+    app.config["annotation_spec"] = ann_spec
+    app.config["annotation_answers"] = ann_answers
 
     # Define and register the label matchers.
     filters = Filters()
-    labels = sorted(set([d["json"]["label"] for d in app.config["data"]]))
+    labels = set([d["json"]["label"] for d in app.config["data"]])
+    preds = set([d["json"]["prediction"] for d in app.config["data"]])
+    labels = sorted(labels.union(preds))
     for lab in labels:
         filters.register_match_fn("label", lab, name=f"label_{lab}")
         filters.register_match_fn("prediction", lab, name=f"prediction_{lab}")
@@ -60,20 +84,26 @@ def create_app(args):
     def view_file():
         state = app.config["state"]
         data = app.config["data"]
+        annotation_answers = app.config["annotation_answers"]
 
         if request.method == "POST":
-            print("FILTER")
-            print(request.form)
-            for (inp, value) in state.items():
-                input_val = request.form.get(inp)
-                if inp == "max_examples":
-                    try:
-                        val = int(input_val)
-                    except ValueError:
-                        val = state[inp]
-                else:
-                    val = input_val == "on"
-                state[inp] = val
+            if "annotation_task" in list(request.form.keys())[0]:
+                annotation_answers = save_annotations_as_json(
+                    request.form, answers_file=args.annotation_answers)
+                print(f"Saved to {args.annotation_answers}")
+            else:
+                print("FILTER")
+                print(request.form)
+                for (inp, value) in state.items():
+                    input_val = request.form.get(inp)
+                    if inp == "max_examples":
+                        try:
+                            val = int(input_val)
+                        except ValueError:
+                            val = state[inp]
+                    else:
+                        val = input_val == "on"
+                    state[inp] = val
 
         d = document(title="Predictions Viewer")
         d += tags.h1("Predictions Viewer")
@@ -106,6 +136,17 @@ def create_app(args):
         d += tags.p(f"Showing {n_shown}/{len(filtered_data)} examples")
         d += tags.br()
 
+        if app.config["annotation_spec"] is not None:
+            already_annotated = []
+            not_annotated = []
+            for example in filtered_data:
+                example_hash = md5(str(example).encode()).hexdigest()
+                if example_hash not in annotation_answers:
+                    not_annotated.append(example)
+                else:
+                    already_annotated.append(example)
+            filtered_data = not_annotated + already_annotated
+
         for (i, example) in enumerate(filtered_data):
             if i == int(state.get("max_examples")):
                 break
@@ -113,13 +154,24 @@ def create_app(args):
                 example, collapse_wordpiece=state.get("collapse wordpiece"),
                 rm_special_tokens=state.get("rm_special_tokens")
             )
+            if app.config["annotation_spec"] is not None:
+                d += tags.br()
+                # Changes d in place
+                example_hash = md5(str(example).encode()).hexdigest()
+                render_annotation_task(d, app.config["annotation_spec"],
+                                       example_hash,
+                                       answers=annotation_answers)
+                d += tags.br()
         return d.render()
 
     return app
 
 
-def load_data(filepath, shuffle=False, random_state=0):
+def load_data(filepath, example_keys=None, shuffle=False, random_state=0):
     data = [json.loads(line) for line in open(filepath)]
+    if example_keys is not None:
+        keys = [line.strip() for line in open(example_keys)]
+        data = [datum for datum in data if datum["__key__"] in keys]
     if shuffle is True:
         random.seed(random_state)
         random.shuffle(data)
@@ -160,6 +212,10 @@ def get_highlighted_tokens(example, collapse_wordpiece=False,
         token_idxs, tokens_with_masks = collapse_wordpiece_tokens(
             tokens_with_masks)
 
+    sorted_tokens = sorted(zip(token_idxs, tokens_with_masks),
+                           key=lambda x: x[1][1])
+    top_three_tokens = [i for (i, (t, z)) in sorted_tokens[-3:]]
+
     for (i, (tok, z)) in zip(token_idxs, tokens_with_masks):
         curr_tok_is_subj = curr_tok_is_obj = False
         if i in range(*example["json"]["subject_idxs"]):
@@ -177,6 +233,9 @@ def get_highlighted_tokens(example, collapse_wordpiece=False,
         elif curr_tok_is_obj is True:
             style = "color:orange;font-weight:bold"
             title = "Object"
+        elif i in top_three_tokens:
+            style = f"background-color:#81c784"
+            title = f"{z:.3f}"
         else:
             color = z2color(z)
             style = f"background-color:{color}"
@@ -199,7 +258,9 @@ def is_special_token(token):
 
 def z2color(z):
     # Cap the colormap to make the highlighting more readable.
-    norm = colors.Normalize(vmin=0, vmax=1.5)
+    if z == 0:
+        return "#FFFFFF"
+    norm = colors.Normalize(vmin=0, vmax=1.2)
     return colors.rgb2hex(cm.PuRd(norm(z)))
 
 
@@ -225,6 +286,60 @@ def collapse_wordpiece_tokens(tokens_with_masks):
     collapsed_idxs.append(current_idx)
     output.append((current_tok, sum(current_zs) / len(current_zs)))
     return collapsed_idxs, output
+
+
+def render_annotation_task(doc, annotation_spec, example_id, answers={}):
+    """
+    annotation_spec is a python dict with the structure
+
+    {"task": str,
+     "fields": list}
+    """
+
+    example_answers = answers.get(str(example_id)) or {}
+
+    f = tags.form(method="post", _id="annform")
+    f += tags.b(annotation_spec["task"].title())
+    f += tags.br()
+    for field in annotation_spec["fields"]:
+        key = f"{example_id}:annotation_task:"
+        key += '_'.join(annotation_spec["task"].split())
+        checked = example_answers.get(key) == field
+        f += tags.input_(_type="radio", _id=key, name=key,
+                         value=field, checked=checked)
+        f += tags.label(field.title(), for_=key)
+        comment_key = key + "_comment_" + field
+        if checked is True:
+            comment_text = example_answers.get(comment_key) or ''
+            f += tags.input_(value=comment_text, _type="text", _id=comment_key,
+                             name=comment_key, placeholder="Optional comment")
+        else:
+            f += tags.input_(_type="text", _id=comment_key,
+                             name=comment_key, placeholder="Optional comment")
+        f += tags.br()
+    f += tags.button("Save")
+    doc += f
+
+
+def save_annotations_as_json(request_form, answers_file="anns.json"):
+    # First remove any unused comment forms.
+    form = dict(request_form)
+    to_rm = []
+    for (key, val) in form.items():
+        if val == '':
+            to_rm.append(key)
+    for key in to_rm:
+        form.pop(key)
+    example_id = list(form.keys())[0].split(':')[0]
+
+    try:
+        all_answers = json.load(open(answers_file))
+    except FileNotFoundError:
+        all_answers = {}
+    all_answers[example_id] = form
+    with open(answers_file, 'w') as outF:
+        json.dump(all_answers, outF)
+    return all_answers
 
 
 def apply_filters(filters, data, state):
