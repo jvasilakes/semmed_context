@@ -203,7 +203,8 @@ def validate_parameters():
         # Use in to check since we can have derivative models,
         # e.g., levitated_marker vs. levitated_marker_attentions
         assert config.Data.Encoder.encoder_type.value in config.Model.model_name.value  # noqa
-    if "attention" not in config.Model.model_name.value:
+    model_name = config.Model.model_name.value
+    if "attention" not in model_name or "hier" not in model_name:
         if config.Model.levitated_pool_fn.value is not None:
             assert "attention" not in config.Model.levitated_pool_fn.value
 
