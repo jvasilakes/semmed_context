@@ -38,7 +38,7 @@ def main(driver, args):
 
         slbeta = SLBeta(row.b, row.d, row.u)
         belief = slbeta.mode.item()  # most likely value under the Beta
-        confidence = slbeta.max_uncertainty().b.item()
+        confidence = 1. - slbeta.max_uncertainty().u.item()
         pred_attrs = {"pmids": pmids[triple_str], "factuality": row.Factuality,
                       "belief": belief, "confidence": confidence}
         driver.execute_query(

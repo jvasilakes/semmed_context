@@ -128,7 +128,25 @@ It is helpful to have the `.ann` and `.json` files in the same directory, so we'
 find filtered_outdir/ -name '*.json' -exec ln -s {} factuality_outdir/converted/ \;
 ```
 
-6. Finally, the data can be summarized with 
+6. Re-annotate Negated Predications
+
+SemRep Factuality is actually quite poor at identifying negated predications: the accuracy of the extracted negative
+polarity predications is around 35%. We've trained a filtering model, similar to the one used to filter incorrect
+predications, which can be used to reannotate negative polarity instances.
+
+```
+python ../scripts/train_filter_model.py path/to/data/{split}.tar.gz --reannotate --task Polarity --logdir path/to/trained/modeldir/
+```
+
+where `{split}` is one of `train`, `val`, `test`. This script will use the already trained filtering model saved at
+`path/to/trained/modeldir/checkpoints/best_model.pth` to filter the data in `{split}.tar.gz`.
+The reannotated dataset will be saved at `path/to/{split}.tar.gz`, and the original will be renamed to
+`path/to/{split}.tar.gz.orig`.
+
+This command will also reannotate the Factuality labels to accord with the new negation labels.
+
+
+7. Finally, the data can be summarized with 
 
 ```
 python scripts/summarize_semrep_ann.py factuality_outdir/converted/

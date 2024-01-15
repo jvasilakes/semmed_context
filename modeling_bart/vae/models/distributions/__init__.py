@@ -135,9 +135,12 @@ class SLEBeta(sle.SLBeta):
     discrete = True
 
     @classmethod
-    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
+    def from_bunched_params(cls, params: torch.FloatTensor,
+                            softmax=True, **kwargs):
+        if softmax is True:
+            params = params.softmax(-1)
         # softmax() to ensure params are positive and b + d + u = 1
-        b, d, u = params.softmax(-1).chunk(3, dim=-1)
+        b, d, u = params.chunk(3, dim=-1)
         return cls(b, d, u)
 
     def __init__(self, b, d, u):
@@ -162,8 +165,11 @@ class SLEDirichlet(sle.SLDirichlet):
     discrete = True
 
     @classmethod
-    def from_bunched_params(cls, params: torch.FloatTensor, **kwargs):
-        b, u = params.softmax(-1).tensor_split([-1], dim=-1)
+    def from_bunched_params(cls, params: torch.FloatTensor,
+                            softmax=True, **kwargs):
+        if softmax is True:
+            params = params.softmax(-1)
+        b, u = params.tensor_split([-1], dim=-1)
         return cls(b, u)
 
     def __init__(self, b, u):

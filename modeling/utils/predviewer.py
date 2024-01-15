@@ -234,7 +234,12 @@ def get_highlighted_tokens(example, collapse_wordpiece=False,
             style = "color:orange;font-weight:bold"
             title = "Object"
         elif i in top_three_tokens:
-            style = f"background-color:#81c784"
+            # Green
+            #style = f"background-color:#81c784"
+            # Red
+            #style = f"background-color:#f47373"
+            # Blue
+            style = f"background-color:#5ebefc"
             title = f"{z:.3f}"
         else:
             color = z2color(z)
@@ -261,7 +266,9 @@ def z2color(z):
     if z == 0:
         return "#FFFFFF"
     norm = colors.Normalize(vmin=0, vmax=1.2)
-    return colors.rgb2hex(cm.PuRd(norm(z)))
+    #return colors.rgb2hex(cm.YlGn(norm(z)))
+    #return colors.rgb2hex(cm.PuRd(norm(z)))
+    return colors.rgb2hex(cm.Blues(norm(z)))
 
 
 def collapse_wordpiece_tokens(tokens_with_masks):

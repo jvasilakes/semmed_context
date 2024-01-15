@@ -8,6 +8,7 @@ from transformers.models.bart.modeling_bart import (
     BartConfig, BartPretrainedModel, BartEncoder, BartDecoder,
     BartForConditionalGeneration, shift_tokens_right)
 
+from .distributions import SLEBeta
 from .util import (DISTRIBUTION_REGISTRY,
                    Seq2SeqVAEModelOutput, Seq2SeqVAELMOutput, VAEEncoderOutput)
 
@@ -122,6 +123,165 @@ class BartVAEEncoder(BartEncoder):
         return latent_dists
 
 
+class FactVAEEncoder(BartEncoder):
+    """
+    Like BART VAE but uses a single Factuality latent
+    parameterizing a Dirichlet to predict the b, d, u
+    parameters of a SLEBeta distribution, which is then
+    used to predict both Polarity and Certainty.
+    """
+    bart_forward = BartEncoder.forward
+
+    def __init__(self, config, shared, latent_structure, tasks_spec=None):
+        super().__init__(config, shared)
+        # copy latent_structure so we don't modify config
+        self.latent_structure = dict(latent_structure)
+        self.tasks_spec = tasks_spec or {}
+
+        hidden_size = config.hidden_size
+        self.context2params = nn.ModuleDict()
+        self.discriminators = nn.ModuleDict()
+
+        assert "Factuality" in latent_structure.keys()
+        assert self.latent_structure["Factuality"] == [3, "sle-dirichlet"], "Factuality structure must be [3, 'sle-dirichlet']"  # noqa
+        assert "Certainty" in self.tasks_spec.keys()
+        assert "Certainty" not in latent_structure, "Use Factuality instead of Certainty in latent_structure"  # noqa
+        assert "Polarity" in self.tasks_spec.keys()
+        assert "Polarity" not in latent_structure, "Use Factuality instead of Polarity in latent_structure"  # noqa
+
+        total_latent_dim = 0
+        for (latent_name, (latent_dim, dist_name)) in self.latent_structure.items():  # noqa
+            if latent_name == "Factuality":
+                #  We use Factuality, which is 3D, to predict Polarity and
+                #  Certainty, which are each 1D.
+                total_latent_dim += 2
+            else:
+                total_latent_dim += latent_dim
+
+            if isinstance(dist_name, str):
+                dist = DISTRIBUTION_REGISTRY[dist_name]
+            else:
+                dist = dist_name
+            self.latent_structure[latent_name][1] = dist
+            # x2 for each entity mention
+            indim = 2 * hidden_size
+            outdim = latent_dim * dist.num_params
+            if dist_name == "sle-dirichlet":
+                outdim = latent_dim + 1
+            self.context2params[latent_name] = nn.Linear(
+                    indim, outdim)
+
+            # Predict Certainty and Polarity from the Factuality latent
+            if latent_name == "Factuality":
+                self.discriminators["Polarity"] = nn.Identity()
+                self.discriminators["Certainty"] = nn.Sequential(
+                    nn.Linear(1, self.tasks_spec["Certainty"]), nn.Softmax(-1))
+                #for task in self.tasks_spec.keys():
+                #    if task in ["Certainty", "Polarity"]:
+                #        self.discriminators[task] = nn.Identity()
+
+            elif latent_name in self.tasks_spec.keys():
+                # For HardKuma and GumbelSoftmax, just take the value itself.
+                # TODO: discrete is the wrong word.
+                if dist.discrete is True:
+                    disc = nn.Identity()
+                else:
+                    # Otherwise, project from the distribution to logits.
+                    outdim = self.tasks_spec[latent_name]
+                    if outdim == 1:
+                        transform = nn.Sigmoid()
+                    else:
+                        transform = nn.Softmax(-1)
+                    disc = nn.Sequential(
+                            nn.Linear(latent_dim, outdim), transform)
+                self.discriminators[latent_name] = disc
+        self.z2hidden = nn.Linear(total_latent_dim, hidden_size)
+
+    def forward(self, *args, **kwargs):
+        encoder_outputs = self.bart_forward(*args, **kwargs)
+        try:
+            input_ids = kwargs["input_ids"]
+        except KeyError:
+            input_ids = args[0]
+
+        # ========================================================
+        # Step 1: Get the entity representations by masking the hidden_states
+        # ========================================================
+        hidden_states = encoder_outputs.last_hidden_state
+        # TODO: remove hard coded entity start id
+        entity_mask = input_ids.eq(50128).to(hidden_states.device)
+        # entity_mask = input_ids.eq(2).to(hidden_states.device)
+        if len(torch.unique_consecutive(entity_mask.sum(1))) > 1:
+            raise ValueError("All examples must have the same number of entity_start tokens.")  # noqa
+        entity_reps = hidden_states[entity_mask, :].view(
+            hidden_states.size(0), -1, hidden_states.size(-1))
+
+        # ========================================================
+        # Step 2: Get the sentence representation by concatenating
+        # the entity representations.
+        # ========================================================
+        sentence_representation = entity_reps.view(entity_reps.size(0), -1)
+
+        # ========================================================
+        # Step 3: Compute the latent values for each latent space
+        # and predict if there is an associated task.
+        # ========================================================
+        latent_dists = self.compute_latent_dists(sentence_representation)
+        zs = []
+        task_logits = {}
+        for latent_name in sorted(latent_dists.keys()):
+            dist = latent_dists[latent_name]
+
+            if latent_name == "Factuality":
+                beta = SLEBeta.from_bunched_params(
+                    dist.rsample(), softmax=False)
+                for task in ["Polarity", "Certainty"]:
+                    if task == "Polarity":
+                        z = beta.mode
+                    else:
+                        # Hacky but we use the inverse because we're
+                        # actually predicting Certainty not *Un*certainty.
+                        #z = (1. - beta.u)**2
+                        z = beta.variance
+                    zs.append(z)
+                    disc = self.discriminators[task]
+                    logits = disc(z).squeeze(1)
+                    task_logits[task] = logits
+            else:
+                z = dist.rsample()
+                zs.append(z)
+                if latent_name in self.discriminators.keys():
+                    disc = self.discriminators[latent_name]
+                    logits = disc(z).squeeze(1)
+                    task_logits[latent_name] = logits
+
+        # ========================================================
+        # Step 4: Decode providing the latent values in place of the
+        # encoder hidden states. This means that the decoder will
+        # only compute cross attention between the output and the latents.
+        # ========================================================
+        zs = torch.cat(zs, dim=1)
+        decoder_init = self.z2hidden(zs)
+        encoder_attention_mask = kwargs["attention_mask"][:, 0].unsqueeze(1)
+
+        return VAEEncoderOutput(last_hidden_state=decoder_init,
+                                hidden_states=decoder_init.unsqueeze(1),
+                                attentions=encoder_attention_mask,
+                                latent_params=latent_dists,
+                                task_logits=task_logits)
+
+    def compute_latent_dists(self, context):
+        latent_dists = {}
+        # Sort to make sure zs above is always in the same order.
+        for latent_name in sorted(self.context2params.keys()):
+            layer = self.context2params[latent_name]
+            params = layer(context)
+            dist_cls = self.latent_structure[latent_name][1]
+            dist = dist_cls.from_bunched_params(params)
+            latent_dists[latent_name] = dist
+        return latent_dists
+
+
 class BartVAEModel(BartPretrainedModel):
     """
     Basically BART-CVAE from
@@ -136,15 +296,20 @@ class BartVAEModel(BartPretrainedModel):
 
     def __init__(self, config: BartConfig,
                  latent_structure: dict,
-                 tasks_spec: dict = None):
+                 tasks_spec: dict = None,
+                 factvae: bool = False):
         super().__init__(config)
         self.latent_structure = latent_structure
 
         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
         self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
 
-        self.encoder = BartVAEEncoder(config, self.shared,
-                                      latent_structure, tasks_spec)
+        if factvae is True:
+            self.encoder = FactVAEEncoder(config, self.shared,
+                                          latent_structure, tasks_spec)
+        else:
+            self.encoder = BartVAEEncoder(config, self.shared,
+                                          latent_structure, tasks_spec)
         self.decoder = BartDecoder(config, self.shared)
 
     def get_input_embeddings(self):
@@ -244,9 +409,10 @@ class BartVAEModel(BartPretrainedModel):
 class BartVAEForConditionalGeneration(BartForConditionalGeneration):
 
     def __init__(self, config: BartConfig, latent_structure,
-                 tasks_spec, label_weights=None):
+                 tasks_spec, label_weights=None, factvae=False):
         super().__init__(config)
-        self.model = BartVAEModel(config, latent_structure, tasks_spec)
+        self.model = BartVAEModel(config, latent_structure, tasks_spec,
+                                  factvae=factvae)
         self.label_weights = label_weights or {}
         self.label_weights = {task: torch.as_tensor(ws)
                               for (task, ws) in self.label_weights.items()}

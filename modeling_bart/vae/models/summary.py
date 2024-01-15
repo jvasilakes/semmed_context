@@ -60,13 +60,14 @@ class AbstractBartSummaryModel(pl.LightningModule):
         for (key, kl) in outputs.kls.items():
             total_loss += self.kl_weight * kl
             self.log(f"train_kl_{key}", kl)
-            if key in outputs.task_losses:
-                task_loss = outputs.task_losses[key]
-                total_loss += task_loss
-                self.log(f"train_task_loss_{key}", task_loss)
+        for (key, task_loss) in outputs.task_losses.items():
+            total_loss += task_loss
+            self.log(f"train_task_loss_{key}", task_loss)
+        task_logits = {key: logits.detach().cpu() for (key, logits)
+                       in outputs.task_logits.items()}
         return {"__key__": batch["__key__"],
                 "loss": total_loss,
-                "task_logits": outputs.task_logits,
+                "task_logits": task_logits,
                 "task_labels": batch["json"]["labels"]}
 
     def training_epoch_end(self, metrics):
@@ -245,7 +246,37 @@ class BartVAESummaryModel(AbstractBartSummaryModel):
         self.latent_structure = latent_structure
         self.bart = BartVAEForConditionalGeneration.from_pretrained(
             self.bart_model_name_or_path, latent_structure=latent_structure,
-            tasks_spec=tasks_spec, label_weights=label_weights)
+            tasks_spec=tasks_spec, label_weights=label_weights, factvae=False)
+        self.save_hyperparameters()
+
+    def get_model_outputs(self, batch):
+        outputs = self(batch["json"]["encoded"],
+                       task_labels=batch["json"]["labels"])
+        return outputs
+
+
+@register_model("factvae")
+class FactVAESummaryModel(AbstractBartSummaryModel):
+
+    @classmethod
+    def from_config(cls, config, logdir=None, tasks_spec=None, **kwargs):
+        return cls(config.Model.bart_model_name_or_path.value,
+                   latent_structure=config.Model.latent_structure.value,
+                   tasks_spec=tasks_spec,
+                   label_weights=config.Data.label_weights.value,
+                   lr=config.Training.lr.value,
+                   weight_decay=config.Training.weight_decay.value,
+                   logdir=logdir, **kwargs)
+
+    def __init__(self, bart_model_name_or_path, latent_structure,
+                 tasks_spec=None, label_weights=None,
+                 lr=2e-5, weight_decay=0.0, logdir=None, epoch=0):
+        super().__init__(bart_model_name_or_path, lr, weight_decay, logdir,
+                         epoch=epoch)
+        self.latent_structure = latent_structure
+        self.bart = BartVAEForConditionalGeneration.from_pretrained(
+            self.bart_model_name_or_path, latent_structure=latent_structure,
+            tasks_spec=tasks_spec, label_weights=label_weights, factvae=True)
         self.save_hyperparameters()
 
     def get_model_outputs(self, batch):

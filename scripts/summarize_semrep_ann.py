@@ -4,7 +4,7 @@ from glob import glob
 from tqdm import tqdm
 from collections import defaultdict
 
-from pybrat import BratAnnotations
+from pybrat import BratAnnotations, BratText
 
 
 def parse_args():
@@ -35,6 +35,7 @@ def main(args):
 
 def summarize_brat_file(annfile):
     counts = {"num_events": 0,
+              "without_sentences": 0,
               "num_attributes": 0,
               "Predicate": defaultdict(int),
               "Factuality": defaultdict(int),
@@ -42,7 +43,13 @@ def summarize_brat_file(annfile):
               "Certainty": defaultdict(int)}
 
     anns = BratAnnotations.from_file(annfile)
+    #sents_file = annfile.replace(".ann", ".json")
+    #txt = BratText.from_files(sentences=sents_file)
     for event in anns.events:
+        #try:
+        #    txt.sentences(annotations=event)[0]
+        #except:
+        #    counts["without_sentences"] += 1
         counts["Predicate"][event.type] += 1
         counts["num_events"] += 1
         for (attr_name, attr) in event.attributes.items():
@@ -62,6 +69,9 @@ def summarize_brat_file_per_predicate(annfile):
     for event in anns.events:
         counts["num_events"] += 1
         for (attr_name, attr) in event.attributes.items():
+            if attr.value == "Uncommitted":
+                counts["num_events"] -= 1
+                break
             counts["num_attributes"] += 1
             counts["Predicate"][event.type][attr_name][attr.value] += 1
     return counts

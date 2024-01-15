@@ -64,7 +64,6 @@ def summarize_example_per_predicate(example):
         if attr_name == "Predicate":
             continue
         counts["Predicate"][pred][attr_name][attr_val] += 1
-        counts["Predicate"][pred][attr_name][attr_val] += 1
     return counts
 
 
