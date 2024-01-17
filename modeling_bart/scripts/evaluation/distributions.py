@@ -32,7 +32,7 @@ def parse_args():
                                 help="Config YAML file used in experiment.")
     compute_parser.add_argument("--epoch", type=int, default=-1,
                                 help="Epoch to evaluation")
-    compute_parser.add_argument("--verbose", action="store_true",
+    compute_parser.add_argument("--quiet", action="store_true",
                                 default=False)
     compute_parser.add_argument("--num_resamples", type=int, default=10)
 
@@ -93,20 +93,20 @@ def compute(args):
         # Informativeness
         # Prediction: predict labels from distributions and compute MIs
         pred_scores, mi_dict, entropy_dict = informativeness(
-            config, params, labels, verbose=args.verbose)
+            config, params, labels, quiet=args.quiet)
         with open(predscore_outf, 'a') as outF:
             json.dump(pred_scores, outF)
             outF.write('\n')
 
         # Independence (MIG)
-        migs = independence(mi_dict, entropy_dict)
+        migs = independence(mi_dict, entropy_dict, quiet=args.quiet)
         with open(migs_outf, 'a') as outF:
             json.dump(migs, outF)
             outF.write('\n')
 
         # Invariance (Pearson's rho)
         # Between each pair of latent distributions
-        corrs = invariance(config, params, labels)
+        corrs = invariance(config, params, labels, quiet=args.quiet)
         with open(corrs_outf, 'a') as outF:
             json.dump(corrs, outF)
             outF.write('\n')
@@ -132,12 +132,17 @@ def summarize(args):
     invariance_table(rhos_data)
 
 
-def informativeness(config, params, labels, verbose=False):
+def informativeness(config, params, labels, quiet=False):
     # {lab_task: dist_task: }
     pred_scores = defaultdict(dict)
     mi_dict = defaultdict(dict)
     entropies_dict = {}
-    for (lab_task, labs) in tqdm(labels.items(), desc="Inf."):
+
+    if quiet is False:
+        pbar = tqdm(total=len(labels.items()), desc="Inf.")
+    for (lab_task, labs) in labels.items():
+        if quiet is False:
+            pbar.update(1)
         entropies_dict[lab_task] = compute_entropy_freq(labs)
         for (dist_task, ps) in params.items():
             dist_name = config.Model.latent_structure.value[dist_task][1]
@@ -157,7 +162,7 @@ def informativeness(config, params, labels, verbose=False):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 clf = LogisticRegression(class_weight="balanced",
-                                         penalty="none").fit(all_zs_feats, labs)
+                                         penalty="none").fit(all_zs_feats, labs)  # noqa
             all_preds = clf.predict(all_zs_feats)
 
             mis = mutual_info_classif(all_zs_feats, labs,
@@ -172,9 +177,13 @@ def informativeness(config, params, labels, verbose=False):
     return pred_scores, mi_dict, entropies_dict
 
 
-def independence(mi_dict, Hvs):
+def independence(mi_dict, Hvs, quiet=False):
     migs = defaultdict(dict)
+    if quiet is False:
+        pbar = tqdm(total=len(mi_dict), desc="Ind..")
     for lab_name in tqdm(mi_dict.keys(), desc="Ind."):
+        if quiet is False:
+            pbar.update(1)
         lab_mis = []
         latent_names = []
         for latent_name in mi_dict[lab_name].keys():
@@ -205,9 +214,13 @@ def compute_entropy_freq(xs, mean=True):
     return H
 
 
-def invariance(config, params, labels):
+def invariance(config, params, labels, quiet=False):
     all_rhos = defaultdict(dict)
-    for (task1, ps1) in tqdm(params.items(), desc="Inv."):
+    if quiet is False:
+        pbar = tqdm(total=len(params), desc="Inv..")
+    for (task1, ps1) in params.items():
+        if quiet is False:
+            pbar.update(1)
         if task1 in ["Certainty", "Polarity"]:
             print("1: ", ps1)
         name1 = config.Model.latent_structure.value[task1][1]
@@ -290,7 +303,7 @@ def plot_migs(migs_data):
         for (task, data) in resample.items():
             migs_dict[task].append(data["MIG"])
     migs_df = pd.DataFrame(migs_dict)
-    box = migs_df.boxplot(patch_artist=True, return_type="dict", widths=0.75)
+    migs_df.boxplot(patch_artist=True, return_type="dict", widths=0.75)
     plt.show()
 
 
