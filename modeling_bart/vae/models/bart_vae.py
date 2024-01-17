@@ -174,11 +174,7 @@ class FactVAEEncoder(BartEncoder):
             # Predict Certainty and Polarity from the Factuality latent
             if latent_name == "Factuality":
                 self.discriminators["Polarity"] = nn.Identity()
-                self.discriminators["Certainty"] = nn.Sequential(
-                    nn.Linear(1, self.tasks_spec["Certainty"]), nn.Softmax(-1))
-                #for task in self.tasks_spec.keys():
-                #    if task in ["Certainty", "Polarity"]:
-                #        self.discriminators[task] = nn.Identity()
+                self.discriminators["Certainty"] = nn.Identity()
 
             elif latent_name in self.tasks_spec.keys():
                 # For HardKuma and GumbelSoftmax, just take the value itself.
@@ -241,8 +237,8 @@ class FactVAEEncoder(BartEncoder):
                     else:
                         # Hacky but we use the inverse because we're
                         # actually predicting Certainty not *Un*certainty.
-                        #z = (1. - beta.u)**2
-                        z = beta.variance
+                        # The exponent roughly aligns u==0.2 with c==0.5.
+                        z = (1. - beta.u)**3
                     zs.append(z)
                     disc = self.discriminators[task]
                     logits = disc(z).squeeze(1)
