@@ -86,9 +86,13 @@ def compute(args):
     if os.path.exists(corrs_outf):
         raise OSError(f"{corrs_outf} already exists.")
 
-    for i in trange(args.num_resamples):
+    if args.quiet is False:
+        pbar = tqdm(total=args.num_resamples)
+    for i in range(args.num_resamples):
         torch.manual_seed(i)
         np.random.seed(i)
+        if args.quiet is False:
+            pbar.update(1)
 
         # Informativeness
         # Prediction: predict labels from distributions and compute MIs
