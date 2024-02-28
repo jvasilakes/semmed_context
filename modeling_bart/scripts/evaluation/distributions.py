@@ -40,6 +40,8 @@ def parse_args():
     summarize_parser.set_defaults(compute=False, summarize=True)
     summarize_parser.add_argument("config_file", type=str,
                                   help="Config YAML file used in experiment.")
+    summarize_parser.add_argument("--mig_plot_outfile", type=str, default=None,
+                                  help="Where to save the plot of the MIGs")
     args = parser.parse_args()
     if [args.compute, args.summarize] == [False, False]:
         parser.print_help()
@@ -129,7 +131,7 @@ def summarize(args):
     migs_data = [json.loads(line.strip()) for line in open(migs_file)]
 
     informativeness_table(pred_data, migs_data)
-    plot_migs(migs_data)
+    plot_migs(migs_data, outfile=args.mig_plot_outfile)
 
     rhos_file = os.path.join(logdir, "evaluation", "rhos.jsonl")
     rhos_data = [json.loads(line.strip()) for line in open(rhos_file)]
@@ -225,8 +227,6 @@ def invariance(config, params, labels, quiet=False):
     for (task1, ps1) in params.items():
         if quiet is False:
             pbar.update(1)
-        if task1 in ["Certainty", "Polarity"]:
-            print("1: ", ps1)
         name1 = config.Model.latent_structure.value[task1][1]
         cls1 = DISTRIBUTION_REGISTRY[name1]
 
@@ -242,9 +242,6 @@ def invariance(config, params, labels, quiet=False):
         for (task2, ps2) in params.items():
             if task2 == task1:
                 continue
-            if task2 in ["Certainty", "Polarity"]:
-                print("2: ", ps1)
-                input()
             name2 = config.Model.latent_structure.value[task2][1]
             cls2 = DISTRIBUTION_REGISTRY[name2]
 
@@ -301,14 +298,17 @@ def informativeness_table(pred_data, migs_data):
             print(df.groupby("Latent").agg("mean").round(3).to_latex())
 
 
-def plot_migs(migs_data):
+def plot_migs(migs_data, outfile=None):
     migs_dict = defaultdict(list)
     for resample in migs_data:
         for (task, data) in resample.items():
             migs_dict[task].append(data["MIG"])
     migs_df = pd.DataFrame(migs_dict)
     migs_df.boxplot(patch_artist=True, return_type="dict", widths=0.75)
-    plt.show()
+    if outfile is None:
+        plt.show()
+    else:
+        plt.savefig(outfile)
 
 
 def invariance_table(rhos_data):
