@@ -131,7 +131,10 @@ def summarize(args):
     migs_data = [json.loads(line.strip()) for line in open(migs_file)]
 
     informativeness_table(pred_data, migs_data)
-    plot_migs(migs_data, outfile=args.mig_plot_outfile)
+    if args.mig_plot_outfile is not None:
+        plot_migs(migs_data, outfile=args.mig_plot_outfile)
+    else:
+        migs_table(migs_data)
 
     rhos_file = os.path.join(logdir, "evaluation", "rhos.jsonl")
     rhos_data = [json.loads(line.strip()) for line in open(rhos_file)]
@@ -309,6 +312,19 @@ def plot_migs(migs_data, outfile=None):
         plt.show()
     else:
         plt.savefig(outfile)
+
+
+def migs_table(migs_data):
+    migs_dict = defaultdict(list)
+    for resample in migs_data:
+        for (task, data) in resample.items():
+            migs_dict[task].append(data["MIG"])
+    migs_df = pd.DataFrame(migs_dict)
+    mean_df = migs_df.mean(0)
+    sd_df = migs_df.std(0)
+    migs_tab = pd.concat([mean_df, sd_df], axis=1)
+    migs_tab.columns = ["mean", "sd"]
+    print(migs_tab.round(3).to_latex())
 
 
 def invariance_table(rhos_data):
